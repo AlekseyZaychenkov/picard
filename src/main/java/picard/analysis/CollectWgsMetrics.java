@@ -99,6 +99,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 "<hr />"
 ;
 
+
     @Argument(shortName = StandardOptionDefinitions.INPUT_SHORT_NAME, doc = "Input SAM or BAM file.")
     public File INPUT;
 
@@ -144,6 +145,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
     @Argument(doc = "Average read length in the file. Default is 150.", optional = true)
     public int READ_LENGTH = 150;
+
 
     protected File INTERVALS = null;
 
