@@ -63,6 +63,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static picard.cmdline.StandardOptionDefinitions.MINIMUM_MAPPING_QUALITY_SHORT_NAME;
 
@@ -146,6 +148,8 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
     @Argument(doc = "Average read length in the file. Default is 150.", optional = true)
     public int READ_LENGTH = 150;
 
+    @Argument(doc = "Needed for multithreading. Amount of reads in the pack.")
+    public static final int READS_IN_PACK = 1000;  // Multithreading:
 
     protected File INTERVALS = null;
 
@@ -188,6 +192,9 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
     @Override
     protected int doWork() {
+        List<SamLocusIterator.LocusInfo> records = new ArrayList<>(READS_IN_PACK); // Multithreading
+        ExecutorService service = Executors.newCachedThreadPool();     // Multithreading
+
         IOUtil.assertFileIsReadable(INPUT);
         IOUtil.assertFileIsWritable(OUTPUT);
         IOUtil.assertFileIsReadable(REFERENCE_SEQUENCE);
