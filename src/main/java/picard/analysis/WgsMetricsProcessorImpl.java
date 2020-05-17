@@ -27,15 +27,13 @@ package picard.analysis;
 import htsjdk.samtools.metrics.MetricsFile;
 import htsjdk.samtools.reference.ReferenceSequence;
 import htsjdk.samtools.reference.ReferenceSequenceFileWalker;
-import htsjdk.samtools.util.AbstractLocusInfo;
-import htsjdk.samtools.util.AbstractLocusIterator;
-import htsjdk.samtools.util.AbstractRecordAndOffset;
-import htsjdk.samtools.util.ProgressLogger;
-import htsjdk.samtools.util.Log;
+import htsjdk.samtools.util.*;
+import org.broadinstitute.barclay.argparser.Argument;
 import picard.filter.CountingFilter;
 import picard.filter.CountingPairedFilter;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.stream.LongStream;
 
 /**
@@ -61,6 +59,13 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
      */
     private final ProgressLogger progress;
 
+
+    private final List<SamLocusIterator.LocusInfo> records; // Multithreading
+
+    @Argument(doc = "Needed for multithreading. Amount of reads in the pack.")
+    public final int READS_IN_PACK;  // Multithreading
+
+
     private final Log log = Log.getInstance(WgsMetricsProcessorImpl.class);
 
     /**
@@ -72,11 +77,15 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
     public WgsMetricsProcessorImpl(AbstractLocusIterator<T, AbstractLocusInfo<T>> iterator,
             ReferenceSequenceFileWalker refWalker,
             AbstractWgsMetricsCollector<T> collector,
-            ProgressLogger progress) {
+            ProgressLogger progress,
+            List<SamLocusIterator.LocusInfo> records) {
         this.iterator = iterator;
         this.collector = collector;
         this.refWalker = refWalker;
         this.progress = progress;
+        this.records = records;
+        this.READS_IN_PACK = records.size();
+
     }
 
     /**
@@ -87,19 +96,39 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
         long counter = 0;
 
         while (iterator.hasNext()) {
-            final AbstractLocusInfo<T> info = iterator.next();
+            //final SamLocusIterator.LocusInfo info = iterator.next();
+            final AbstractLocusInfo info = iterator.next();
             final ReferenceSequence ref = refWalker.get(info.getSequenceIndex());
-            boolean referenceBaseN = collector.isReferenceBaseN(info.getPosition(), ref);
-            collector.addInfo(info, ref, referenceBaseN);
-            if (referenceBaseN) {
+
+            /* Multithreading */
+            // Check that the reference is not N
+            final byte base = ref.getBases()[info.getPosition() - 1];
+            if (SequenceUtil.isNoCall(base))
+                continue;
+
+            records.add((SamLocusIterator.LocusInfo)info);
+            ++counter;
+
+            // Record progress
+            progress.record(info.getSequenceName(), info.getPosition());
+
+            if (records.size() < READS_IN_PACK && iterator.hasNext())
+            {
                 continue;
             }
 
-            progress.record(info.getSequenceName(), info.getPosition());
+            /*boolean referenceBaseN = collector.isReferenceBaseN(info.getPosition(), ref);
+            collector.addInfo(info, ref, referenceBaseN);
+            if (referenceBaseN) {
+                continue;
+            }*/
+
+            // Record progress
+          /*  progress.record(info.getSequenceName(), info.getPosition());
             if (collector.isTimeToStop(++counter)) {
                 break;
             }
-            collector.setCounter(counter);
+            collector.setCounter(counter);*/
         }
         // check that we added the same number of bases to the raw coverage histogram and the base quality histograms
         final long sumBaseQ = Arrays.stream(collector.unfilteredBaseQHistogramArray).sum();

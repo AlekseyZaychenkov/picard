@@ -192,7 +192,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
     @Override
     protected int doWork() {
-        List<SamLocusIterator.LocusInfo> records = new ArrayList<>(READS_IN_PACK); // Multithreading
+        List<SamLocusIterator.LocusInfo> records = new ArrayList<SamLocusIterator.LocusInfo>(READS_IN_PACK); // Multithreading
         ExecutorService service = Executors.newCachedThreadPool();     // Multithreading
 
         IOUtil.assertFileIsReadable(INPUT);
@@ -236,7 +236,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
         iterator.setIncludeNonPfReads(false);
 
         final AbstractWgsMetricsCollector<?> collector = getCollector(COVERAGE_CAP, getIntervalsToExamine());
-        final WgsMetricsProcessor processor = getWgsMetricsProcessor(progress, refWalker, iterator, collector);
+        final WgsMetricsProcessor processor = getWgsMetricsProcessor(progress, refWalker, iterator, collector, records);
         processor.processFile();
 
         final MetricsFile<WgsMetrics, Integer> out = getMetricsFile();
@@ -255,10 +255,14 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
         return 0;
     }
 
+
+
+
     private <T extends AbstractRecordAndOffset> WgsMetricsProcessorImpl<T> getWgsMetricsProcessor(
             ProgressLogger progress, ReferenceSequenceFileWalker refWalker,
-            AbstractLocusIterator<T, AbstractLocusInfo<T>> iterator, AbstractWgsMetricsCollector<T> collector) {
-        return new WgsMetricsProcessorImpl<>(iterator, refWalker, collector, progress);
+            AbstractLocusIterator<T, AbstractLocusInfo<T>> iterator, AbstractWgsMetricsCollector<T> collector,
+            List<SamLocusIterator.LocusInfo> records) {
+        return new WgsMetricsProcessorImpl<T>(iterator, refWalker, collector, progress, records);
     }
 
     /** Gets the intervals over which we will calculate metrics. */
