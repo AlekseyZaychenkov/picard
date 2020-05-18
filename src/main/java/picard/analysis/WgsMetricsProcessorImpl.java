@@ -32,8 +32,14 @@ import org.broadinstitute.barclay.argparser.Argument;
 import picard.filter.CountingFilter;
 import picard.filter.CountingPairedFilter;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.LongStream;
 
 /**
@@ -60,10 +66,8 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
     private final ProgressLogger progress;
 
 
-    private final List<SamLocusIterator.LocusInfo> records; // Multithreading
-
-    @Argument(doc = "Needed for multithreading. Amount of reads in the pack.")
-    public final int READS_IN_PACK;  // Multithreading
+  /*  Needed for multithreading. Amount of reads in the pack.")  */
+    public static final int READS_IN_PACK = 1000;  // Multithreading
 
 
     private final Log log = Log.getInstance(WgsMetricsProcessorImpl.class);
@@ -77,15 +81,11 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
     public WgsMetricsProcessorImpl(AbstractLocusIterator<T, AbstractLocusInfo<T>> iterator,
             ReferenceSequenceFileWalker refWalker,
             AbstractWgsMetricsCollector<T> collector,
-            ProgressLogger progress,
-            List<SamLocusIterator.LocusInfo> records) {
+            ProgressLogger progress) {
         this.iterator = iterator;
         this.collector = collector;
         this.refWalker = refWalker;
         this.progress = progress;
-        this.records = records;
-        this.READS_IN_PACK = records.size();
-
     }
 
     /**
@@ -94,8 +94,13 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
     @Override
     public void processFile() {
         long counter = 0;
+        List<SamLocusIterator.LocusInfo> records = new ArrayList<>(READS_IN_PACK);
+        ExecutorService service = Executors.newCachedThreadPool();
 
         while (iterator.hasNext()) {
+            final List<SamLocusIterator.LocusInfo> tmpRecords = records;
+            records = new ArrayList<>(READS_IN_PACK);
+
             //final SamLocusIterator.LocusInfo info = iterator.next();
             final AbstractLocusInfo info = iterator.next();
             final ReferenceSequence ref = refWalker.get(info.getSequenceIndex());
@@ -111,25 +116,53 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
 
             // Record progress
             progress.record(info.getSequenceName(), info.getPosition());
-
             if (records.size() < READS_IN_PACK && iterator.hasNext())
             {
                 continue;
             }
 
-            /*boolean referenceBaseN = collector.isReferenceBaseN(info.getPosition(), ref);
-            collector.addInfo(info, ref, referenceBaseN);
-            if (referenceBaseN) {
-                continue;
-            }*/
+
+            // Add read pack to the collector in a separate stream
+            service.submit(new Runnable() {
+                @Override
+                public void run() {
+                    for (SamLocusIterator.LocusInfo rec : tmpRecords) {
+                        //collector.addInfo(rec);
+                        boolean referenceBaseN = collector.isReferenceBaseN(info.getPosition(), ref);
+                        collector.addInfo(info, ref, referenceBaseN);
+                        if (referenceBaseN) {
+                            continue;
+                        }
+
+                        progress.record(info.getSequenceName(), info.getPosition());
+                    }
+                }
+            });
+            // Perhaps stop
+           // if (usingStopAfter && counter > stopAfter) break;
+
+
 
             // Record progress
-          /*  progress.record(info.getSequenceName(), info.getPosition());
             if (collector.isTimeToStop(++counter)) {
                 break;
             }
-            collector.setCounter(counter);*/
+            collector.setCounter(counter);
         }
+
+        service.shutdown();
+
+
+        try {
+            service.awaitTermination(1, TimeUnit.DAYS);
+
+        } catch (InterruptedException ex) {
+            Logger.getLogger(SinglePassSamProgram.class.getName()).log(Level.SEVERE,
+                    null, ex);
+        }
+
+
+
         // check that we added the same number of bases to the raw coverage histogram and the base quality histograms
         final long sumBaseQ = Arrays.stream(collector.unfilteredBaseQHistogramArray).sum();
         final long sumDepthHisto = LongStream.rangeClosed(0, collector.coverageCap).map(i -> (i * collector.unfilteredDepthHistogramArray[(int) i])).sum();
