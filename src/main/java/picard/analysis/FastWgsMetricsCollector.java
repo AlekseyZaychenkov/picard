@@ -113,10 +113,11 @@ public class FastWgsMetricsCollector extends AbstractWgsMetricsCollector<EdgingR
             final int readNamesSize = pileupSize.get(info.getPosition());
             final int highQualityDepth = Math.min(readNamesSize, coverageCap);
             if (highQualityDepth < readNamesSize) {
-                basesExcludedByCapping += readNamesSize - coverageCap;
+                basesExcludedByCapping.getAndAdd(readNamesSize - coverageCap);
             }
-            highQualityDepthHistogramArray[highQualityDepth]++;
-            unfilteredDepthHistogramArray[unfilteredDepthSize.get(info.getPosition())]++;
+
+            highQualityDepthHistogramArray.getAndDecrement(highQualityDepth);
+            unfilteredDepthHistogramArray.getAndDecrement(unfilteredDepthSize.get(info.getPosition()));
         }
     }
 
@@ -132,18 +133,18 @@ public class FastWgsMetricsCollector extends AbstractWgsMetricsCollector<EdgingR
             }
             final byte quality = qualities[i + record.getOffset()];
             if (quality <= 2) {
-                basesExcludedByBaseq++;
+                basesExcludedByBaseq.getAndDecrement();
             } else {
                 if (unfilteredDepthSize.get(index) < coverageCap) {
-                    unfilteredBaseQHistogramArray[quality]++;
+                    unfilteredBaseQHistogramArray.getAndDecrement(quality);
                     unfilteredDepthSize.increment(index);
                 }
                 if (quality < collectWgsMetrics.MINIMUM_BASE_QUALITY || SequenceUtil.isNoCall(bases[i + record.getOffset()])){
-                    basesExcludedByBaseq++;
+                    basesExcludedByBaseq.getAndDecrement();
                 } else {
                     final int bsq = excludeByQuality(recordsAndOffsetsForName, index);
                     if (recordsAndOffsetsForName.size() - bsq > 0) {
-                        basesExcludedByOverlap++;
+                        basesExcludedByOverlap.getAndDecrement();
                     } else {
                         pileupSize.increment(index);
                     }

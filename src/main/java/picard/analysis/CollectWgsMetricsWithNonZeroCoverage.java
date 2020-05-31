@@ -32,6 +32,7 @@ import htsjdk.samtools.util.IOUtil;
 import htsjdk.samtools.util.IntervalList;
 import htsjdk.samtools.util.Log;
 import htsjdk.samtools.util.StringUtil;
+import org.apache.commons.lang.ArrayUtils;
 import org.broadinstitute.barclay.argparser.ExperimentalFeature;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import picard.PicardException;
@@ -43,6 +44,7 @@ import picard.filter.CountingPairedFilter;
 import picard.util.RExecutor;
 
 import java.io.File;
+import java.util.Arrays;
 import java.util.List;
 
 @DocumentedFeature
@@ -215,8 +217,10 @@ public class CollectWgsMetricsWithNonZeroCoverage extends CollectWgsMetrics {
 
             // set count of the coverage-zero bin to 0 and re-calculate metrics
             // note we don't need to update the base quality histogram; there are no bases in the depth = 0 bin
-            highQualityDepthHistogramArray[0] = 0;
-            unfilteredDepthHistogramArray[0] = 0;
+            //highQualityDepthHistogramArray[0] = 0;
+            highQualityDepthHistogramArray.getAndAdd(0, 0);
+            //unfilteredDepthHistogramArray[0] = 0;
+            unfilteredDepthHistogramArray.getAndAdd(0, 0);
 
             final WgsMetricsWithNonZeroCoverage metricsNonZero = (WgsMetricsWithNonZeroCoverage) getMetrics(dupeFilter, adapterFilter, mapqFilter, pairFilter);
             metricsNonZero.CATEGORY = WgsMetricsWithNonZeroCoverage.Category.NON_ZERO_REGIONS;
@@ -232,14 +236,15 @@ public class CollectWgsMetricsWithNonZeroCoverage extends CollectWgsMetrics {
         }
 
         protected Histogram<Integer> getDepthHistogram() {
-            return getHistogram(highQualityDepthHistogramArray, "coverage", "count_WHOLE_GENOME");
+            List arr1 = Arrays.asList(collector.highQualityDepthHistogramArray);
+            return getHistogram(ArrayUtils.toPrimitive((Long[])arr1.toArray()), "coverage", "count_WHOLE_GENOME");
         }
 
         private Histogram<Integer> getDepthHistogramNonZero() {
             final Histogram<Integer> depthHistogram = new Histogram<>("coverage", "count_NON_ZERO_REGIONS");
             // do not include the zero-coverage bin
-            for (int i = 1; i < highQualityDepthHistogramArray.length; ++i) {
-                depthHistogram.increment(i, highQualityDepthHistogramArray[i]);
+            for (int i = 1; i < highQualityDepthHistogramArray.length(); ++i) {
+                depthHistogram.increment(i, highQualityDepthHistogramArray.get(i));
             }
             return depthHistogram;
         }

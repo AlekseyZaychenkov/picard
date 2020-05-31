@@ -31,8 +31,14 @@ import htsjdk.samtools.util.AbstractRecordAndOffset;
 import htsjdk.samtools.util.Histogram;
 import htsjdk.samtools.util.IntervalList;
 import htsjdk.samtools.util.SequenceUtil;
+import org.apache.commons.lang.ArrayUtils;
 import picard.filter.CountingFilter;
 import picard.filter.CountingPairedFilter;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
 
 /**
  * Class for collecting data on reference coverage, base qualities and excluded bases from one AbstractLocusInfo object for
@@ -52,28 +58,28 @@ public abstract class AbstractWgsMetricsCollector<T extends AbstractRecordAndOff
     /** Count of sites with a given depth of coverage. Includes all but quality 2 bases.
      * We draw depths from this histogram when we calculate the theoretical het sensitivity.
      */
-    protected final long[] unfilteredDepthHistogramArray;
+    protected final AtomicLongArray unfilteredDepthHistogramArray;
     /** Count of bases observed with a given base quality. Includes all but quality 2 bases.
      * We draw bases from this histogram when we calculate the theoretical het sensitivity.
      */
-    protected final long[] unfilteredBaseQHistogramArray;
+    protected final AtomicLongArray unfilteredBaseQHistogramArray;
     /**
      * Count of sites with a given depth of coverage.
      * Excludes bases with quality below MINIMUM_BASE_QUALITY (default 20).
      */
-    protected final long[] highQualityDepthHistogramArray;
+    protected final AtomicLongArray highQualityDepthHistogramArray;
     /**
      * Number of aligned bases that were filtered out because they were of low base quality (default is < 20).
      */
-    long basesExcludedByBaseq = 0;
+    protected AtomicLong basesExcludedByBaseq = new AtomicLong();
     /**
      * Number of aligned bases that were filtered out because they were the second observation from an insert with overlapping reads.
      */
-    long basesExcludedByOverlap = 0;
+    protected AtomicLong basesExcludedByOverlap = new AtomicLong();
     /**
      * Number of aligned bases that were filtered out because they would have raised coverage above the capped value (default cap = 250x).
      */
-    long basesExcludedByCapping = 0;
+    protected AtomicLong basesExcludedByCapping = new AtomicLong();
     /**
      * Positions with coverage exceeding this value are treated as if they had coverage at this value
      */
@@ -100,9 +106,9 @@ public abstract class AbstractWgsMetricsCollector<T extends AbstractRecordAndOff
             throw new IllegalArgumentException("Coverage cap must be positive.");
         }
         this.collectWgsMetrics = collectWgsMetrics;
-        unfilteredDepthHistogramArray = new long[coverageCap + 1];
-        highQualityDepthHistogramArray = new long[coverageCap + 1];
-        unfilteredBaseQHistogramArray = new long[Byte.MAX_VALUE];
+        unfilteredDepthHistogramArray = new AtomicLongArray(coverageCap + 1);
+        highQualityDepthHistogramArray = new AtomicLongArray(coverageCap + 1);
+        unfilteredBaseQHistogramArray = new AtomicLongArray(Byte.MAX_VALUE);
         this.coverageCap    = coverageCap;
         this.intervals      = intervals;
         this.usingStopAfter = collectWgsMetrics.STOP_AFTER > 0;
@@ -143,15 +149,18 @@ public abstract class AbstractWgsMetricsCollector<T extends AbstractRecordAndOff
     }
 
     protected Histogram<Integer> getHighQualityDepthHistogram() {
-        return getHistogram(highQualityDepthHistogramArray, "coverage", "high_quality_coverage_count");
+        List arr = Arrays.asList(highQualityDepthHistogramArray);
+        return getHistogram(ArrayUtils.toPrimitive((Long[])arr.toArray()), "coverage", "high_quality_coverage_count");
     }
 
     protected Histogram<Integer> getUnfilteredDepthHistogram() {
-        return getHistogram(unfilteredDepthHistogramArray, "coverage", "unfiltered_coverage_count");
+        List arr = Arrays.asList(highQualityDepthHistogramArray);
+        return getHistogram(ArrayUtils.toPrimitive((Long[])arr.toArray()), "coverage", "unfiltered_coverage_count");
     }
 
     protected Histogram<Integer> getUnfilteredBaseQHistogram() {
-        return getHistogram(unfilteredBaseQHistogramArray, "baseq", "unfiltered_baseq_count");
+        List arr = Arrays.asList(highQualityDepthHistogramArray);
+        return getHistogram(ArrayUtils.toPrimitive((Long[])arr.toArray()), "baseq", "unfiltered_baseq_count");
     }
 
     protected Histogram<Integer> getHistogram(final long[] array, final String binLabel, final String valueLabel) {
@@ -174,6 +183,7 @@ public abstract class AbstractWgsMetricsCollector<T extends AbstractRecordAndOff
             final CountingFilter adapterFilter,
             final CountingFilter mapqFilter,
             final CountingPairedFilter pairFilter) {
+
         return collectWgsMetrics.generateWgsMetrics(
                 this.intervals,
                 getHighQualityDepthHistogram(),
@@ -182,9 +192,9 @@ public abstract class AbstractWgsMetricsCollector<T extends AbstractRecordAndOff
                 collectWgsMetrics.getBasesExcludedBy(mapqFilter),
                 collectWgsMetrics.getBasesExcludedBy(dupeFilter),
                 collectWgsMetrics.getBasesExcludedBy(pairFilter),
-                basesExcludedByBaseq,
-                basesExcludedByOverlap,
-                basesExcludedByCapping,
+                basesExcludedByBaseq.get(),
+                basesExcludedByOverlap.get(),
+                basesExcludedByCapping.get(),
                 coverageCap,
                 getUnfilteredBaseQHistogram(),
                 collectWgsMetrics.SAMPLE_SIZE);

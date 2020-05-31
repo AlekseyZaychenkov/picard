@@ -148,9 +148,6 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
     @Argument(doc = "Average read length in the file. Default is 150.", optional = true)
     public int READ_LENGTH = 150;
 
-    @Argument(doc = "Needed for multithreading. Amount of reads in the pack.")
-    public static final int READS_IN_PACK = 1000;  // Multithreading:
-
     protected File INTERVALS = null;
 
     private SAMFileHeader header = null;
@@ -192,9 +189,6 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
     @Override
     protected int doWork() {
-        List<SamLocusIterator.LocusInfo> records = new ArrayList<SamLocusIterator.LocusInfo>(READS_IN_PACK); // Multithreading
-        ExecutorService service = Executors.newCachedThreadPool();     // Multithreading
-
         IOUtil.assertFileIsReadable(INPUT);
         IOUtil.assertFileIsWritable(OUTPUT);
         IOUtil.assertFileIsReadable(REFERENCE_SEQUENCE);
@@ -236,7 +230,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
         iterator.setIncludeNonPfReads(false);
 
         final AbstractWgsMetricsCollector<?> collector = getCollector(COVERAGE_CAP, getIntervalsToExamine());
-        final WgsMetricsProcessor processor = getWgsMetricsProcessor(progress, refWalker, iterator, collector, records);
+        final WgsMetricsProcessor processor = getWgsMetricsProcessor(progress, refWalker, iterator, collector);
         processor.processFile();
 
         final MetricsFile<WgsMetrics, Integer> out = getMetricsFile();
@@ -260,9 +254,8 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
     private <T extends AbstractRecordAndOffset> WgsMetricsProcessorImpl<T> getWgsMetricsProcessor(
             ProgressLogger progress, ReferenceSequenceFileWalker refWalker,
-            AbstractLocusIterator<T, AbstractLocusInfo<T>> iterator, AbstractWgsMetricsCollector<T> collector,
-            List<SamLocusIterator.LocusInfo> records) {
-        return new WgsMetricsProcessorImpl<T>(iterator, refWalker, collector, progress, records);
+            AbstractLocusIterator<T, AbstractLocusInfo<T>> iterator, AbstractWgsMetricsCollector<T> collector) {
+        return new WgsMetricsProcessorImpl<T>(iterator, refWalker, collector, progress);
     }
 
     /** Gets the intervals over which we will calculate metrics. */
@@ -421,30 +414,31 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
             int unfilteredDepth = 0;
 
             for (final SamLocusIterator.RecordAndOffset recs : info.getRecordAndOffsets()) {
-                if (recs.getBaseQuality() <= 2) { ++basesExcludedByBaseq;   continue; }
+                if (recs.getBaseQuality() <= 2) { basesExcludedByBaseq.incrementAndGet();   continue; }
 
                 // we add to the base quality histogram any bases that have quality > 2
                 // the raw depth may exceed the coverageCap before the high-quality depth does. So stop counting once we reach the coverage cap.
                 if (unfilteredDepth < coverageCap) {
-                    unfilteredBaseQHistogramArray[recs.getRecord().getBaseQualities()[recs.getOffset()]]++;
+                    unfilteredBaseQHistogramArray.getAndIncrement(recs.getRecord().getBaseQualities()[recs.getOffset()]);
                     unfilteredDepth++;
                 }
 
                 if (recs.getBaseQuality() < collectWgsMetrics.MINIMUM_BASE_QUALITY ||
                         SequenceUtil.isNoCall(recs.getReadBase())) {
-                    ++basesExcludedByBaseq;
+                    basesExcludedByBaseq.incrementAndGet();
                     continue;
                 }
                 if (!readNames.add(recs.getRecord().getReadName())) {
-                    ++basesExcludedByOverlap;
+                    basesExcludedByOverlap.incrementAndGet();
                     continue;
                 }
                 pileupSize++;
             }
             final int highQualityDepth = Math.min(pileupSize, coverageCap);
-            if (highQualityDepth < pileupSize) basesExcludedByCapping += pileupSize - coverageCap;
-            highQualityDepthHistogramArray[highQualityDepth]++;
-            unfilteredDepthHistogramArray[unfilteredDepth]++;
+            if (highQualityDepth < pileupSize)
+                basesExcludedByCapping.getAndAdd(pileupSize - coverageCap);
+            highQualityDepthHistogramArray.getAndIncrement(highQualityDepth);
+            unfilteredDepthHistogramArray.getAndIncrement(unfilteredDepth);
         }
     }
 }

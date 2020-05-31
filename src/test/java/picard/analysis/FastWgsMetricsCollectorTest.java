@@ -225,9 +225,10 @@ public class FastWgsMetricsCollectorTest {
         }
         assertEquals( collector.basesExcludedByOverlap, 12, "Excluded by overlap:");
 
-        assertEquals(collector.highQualityDepthHistogramArray[2],0);
-        assertEquals(collector.highQualityDepthHistogramArray[0],84);
-        assertEquals(collector.highQualityDepthHistogramArray[1],16);
+
+        assertEquals(collector.highQualityDepthHistogramArray.get(2),0);
+        assertEquals(collector.highQualityDepthHistogramArray.get(0),84);
+        assertEquals(collector.highQualityDepthHistogramArray.get(1),16);
     }
 
     @Test
@@ -240,9 +241,9 @@ public class FastWgsMetricsCollectorTest {
             collector.addInfo(info, ref, false);
         }
         assertEquals( collector.basesExcludedByOverlap, 12,"Excluded by overlap:");
-        assertEquals(collector.highQualityDepthHistogramArray[2],0);
-        assertEquals(collector.highQualityDepthHistogramArray[0],84);
-        assertEquals(collector.highQualityDepthHistogramArray[1],16);
+        assertEquals(collector.highQualityDepthHistogramArray.get(2),0);
+        assertEquals(collector.highQualityDepthHistogramArray.get(0),84);
+        assertEquals(collector.highQualityDepthHistogramArray.get(1),16);
     }
 
     @Test
@@ -256,9 +257,9 @@ public class FastWgsMetricsCollectorTest {
         }
         assertEquals( collector.basesExcludedByOverlap, 11, "Excluded by overlap:");
 
-        assertEquals(collector.highQualityDepthHistogramArray[0],3);
-        assertEquals(collector.highQualityDepthHistogramArray[1],17);
-        assertEquals(collector.highQualityDepthHistogramArray[2],0);
+        assertEquals(collector.highQualityDepthHistogramArray.get(0),3);
+        assertEquals(collector.highQualityDepthHistogramArray.get(1),17);
+        assertEquals(collector.highQualityDepthHistogramArray.get(2),0);
     }
 
     @Test
@@ -271,8 +272,8 @@ public class FastWgsMetricsCollectorTest {
             collector.addInfo(info, ref, false);
         }
         assertEquals( collector.basesExcludedByOverlap, 11,"Excluded by overlap:");
-        assertEquals(collector.highQualityDepthHistogramArray[0],3);
-        assertEquals(collector.highQualityDepthHistogramArray[1],17);
-        assertEquals(collector.highQualityDepthHistogramArray[2],0);
+        assertEquals(collector.highQualityDepthHistogramArray.get(0),3);
+        assertEquals(collector.highQualityDepthHistogramArray.get(1),17);
+        assertEquals(collector.highQualityDepthHistogramArray.get(2),0);
     }
 }

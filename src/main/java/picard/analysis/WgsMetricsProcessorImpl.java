@@ -28,7 +28,9 @@ import htsjdk.samtools.metrics.MetricsFile;
 import htsjdk.samtools.reference.ReferenceSequence;
 import htsjdk.samtools.reference.ReferenceSequenceFileWalker;
 import htsjdk.samtools.util.*;
+import org.apache.commons.lang.ArrayUtils;
 import org.broadinstitute.barclay.argparser.Argument;
+import picard.PicardException;
 import picard.filter.CountingFilter;
 import picard.filter.CountingPairedFilter;
 
@@ -98,12 +100,9 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
         ExecutorService service = Executors.newCachedThreadPool();
 
         while (iterator.hasNext()) {
-            final List<SamLocusIterator.LocusInfo> tmpRecords = records;
-            records = new ArrayList<>(READS_IN_PACK);
-
-            //final SamLocusIterator.LocusInfo info = iterator.next();
-            final AbstractLocusInfo info = iterator.next();
-            final ReferenceSequence ref = refWalker.get(info.getSequenceIndex());
+            AbstractLocusInfo info = iterator.next();
+            ReferenceSequence ref = refWalker.get(info.getSequenceIndex());
+            //System.out.println("<=========Flag 01===========>   "+info);
 
             /* Multithreading */
             // Check that the reference is not N
@@ -112,7 +111,7 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
                 continue;
 
             records.add((SamLocusIterator.LocusInfo)info);
-            ++counter;
+
 
             // Record progress
             progress.record(info.getSequenceName(), info.getPosition());
@@ -121,51 +120,63 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
                 continue;
             }
 
+            final List<SamLocusIterator.LocusInfo> tmpRecords = records;
+            records = new ArrayList<>(READS_IN_PACK);
 
             // Add read pack to the collector in a separate stream
             service.submit(new Runnable() {
                 @Override
                 public void run() {
                     for (SamLocusIterator.LocusInfo rec : tmpRecords) {
-                        //collector.addInfo(rec);
                         boolean referenceBaseN = collector.isReferenceBaseN(info.getPosition(), ref);
-                        collector.addInfo(info, ref, referenceBaseN);
+                        collector.addInfo((AbstractLocusInfo) rec, ref, referenceBaseN);
                         if (referenceBaseN) {
                             continue;
                         }
-
-                        progress.record(info.getSequenceName(), info.getPosition());
+                      //  progress.record(info.getSequenceName(), info.getPosition());
                     }
                 }
             });
             // Perhaps stop
            // if (usingStopAfter && counter > stopAfter) break;
 
-
-
             // Record progress
             if (collector.isTimeToStop(++counter)) {
                 break;
             }
+
             collector.setCounter(counter);
         }
-
         service.shutdown();
 
 
         try {
             service.awaitTermination(1, TimeUnit.DAYS);
-
         } catch (InterruptedException ex) {
             Logger.getLogger(SinglePassSamProgram.class.getName()).log(Level.SEVERE,
                     null, ex);
         }
 
 
+        long unfilteredBaseQHistogramSum = 0;
+        long unfilteredDepthHistogramSum = 0;
+        for (int i = 0; i < collector.unfilteredBaseQHistogramArray.length(); ++i) {
+            unfilteredBaseQHistogramSum += collector.unfilteredBaseQHistogramArray.get(i);
+        }
+        for (int i = 0; i <= collector.coverageCap; ++i) {
+            unfilteredDepthHistogramSum += i*collector.unfilteredDepthHistogramArray.get(i);
+        }
+        if (unfilteredBaseQHistogramSum != unfilteredDepthHistogramSum) {
+            throw new PicardException("updated coverage and baseQ distributions unequally");
+        }
+
 
         // check that we added the same number of bases to the raw coverage histogram and the base quality histograms
-        final long sumBaseQ = Arrays.stream(collector.unfilteredBaseQHistogramArray).sum();
-        final long sumDepthHisto = LongStream.rangeClosed(0, collector.coverageCap).map(i -> (i * collector.unfilteredDepthHistogramArray[(int) i])).sum();
+        List arr1 = Arrays.asList(collector.unfilteredBaseQHistogramArray);
+        final long sumBaseQ = Arrays.stream(ArrayUtils.toPrimitive((Long[])arr1.toArray())).sum();
+
+        List arr2 = Arrays.asList(collector.unfilteredDepthHistogramArray);
+        final long sumDepthHisto = LongStream.rangeClosed(0, collector.coverageCap).map(i -> (i * ArrayUtils.toPrimitive((Long[])arr2.toArray())[(int) i])).sum();
         if (sumBaseQ != sumDepthHisto) {
             log.error("Coverage and baseQ distributions contain different amount of bases!");
         }
