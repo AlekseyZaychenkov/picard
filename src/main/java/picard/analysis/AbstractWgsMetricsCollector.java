@@ -149,18 +149,27 @@ public abstract class AbstractWgsMetricsCollector<T extends AbstractRecordAndOff
     }
 
     protected Histogram<Integer> getHighQualityDepthHistogram() {
-        List arr = Arrays.asList(highQualityDepthHistogramArray);
-        return getHistogram(ArrayUtils.toPrimitive((Long[])arr.toArray()), "coverage", "high_quality_coverage_count");
+        long[] highQualityDepthHistogramNotAtomicArray = new long[highQualityDepthHistogramArray.length()];
+        for(int i=0; i<highQualityDepthHistogramArray.length(); i++)
+            highQualityDepthHistogramNotAtomicArray[i] = highQualityDepthHistogramArray.get(i);
+
+        return getHistogram(highQualityDepthHistogramNotAtomicArray, "coverage", "high_quality_coverage_count");
     }
 
     protected Histogram<Integer> getUnfilteredDepthHistogram() {
-        List arr = Arrays.asList(highQualityDepthHistogramArray);
-        return getHistogram(ArrayUtils.toPrimitive((Long[])arr.toArray()), "coverage", "unfiltered_coverage_count");
+        long[] unfilteredDepthHistogramNotAtomicArray = new long[unfilteredDepthHistogramArray.length()];
+        for(int i=0; i<unfilteredDepthHistogramArray.length(); i++)
+            unfilteredDepthHistogramNotAtomicArray[i] = unfilteredDepthHistogramArray.get(i);
+
+        return getHistogram(unfilteredDepthHistogramNotAtomicArray, "coverage", "unfiltered_coverage_count");
     }
 
     protected Histogram<Integer> getUnfilteredBaseQHistogram() {
-        List arr = Arrays.asList(highQualityDepthHistogramArray);
-        return getHistogram(ArrayUtils.toPrimitive((Long[])arr.toArray()), "baseq", "unfiltered_baseq_count");
+        long[] unfilteredBaseQHistogramNotAtomicArray = new long[unfilteredBaseQHistogramArray.length()];
+        for(int i=0; i<unfilteredBaseQHistogramArray.length(); i++)
+            unfilteredBaseQHistogramNotAtomicArray[i] = unfilteredBaseQHistogramArray.get(i);
+
+        return getHistogram(unfilteredBaseQHistogramNotAtomicArray, "baseq", "unfiltered_baseq_count");
     }
 
     protected Histogram<Integer> getHistogram(final long[] array, final String binLabel, final String valueLabel) {
