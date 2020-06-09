@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.LongStream;
@@ -172,11 +173,18 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
 
 
         // check that we added the same number of bases to the raw coverage histogram and the base quality histograms
-        List arr1 = Arrays.asList(collector.unfilteredBaseQHistogramArray);
-        final long sumBaseQ = Arrays.stream(ArrayUtils.toPrimitive((Long[])arr1.toArray())).sum();
+        AtomicLongArray unfilteredBaseQHistogramArray = collector.unfilteredBaseQHistogramArray;
+        long sum = 0;
+        for(int i=0; i<unfilteredBaseQHistogramArray.length(); i++)
+            sum += unfilteredBaseQHistogramArray.get(i);
+        final long sumBaseQ = sum;
 
-        List arr2 = Arrays.asList(collector.unfilteredDepthHistogramArray);
-        final long sumDepthHisto = LongStream.rangeClosed(0, collector.coverageCap).map(i -> (i * ArrayUtils.toPrimitive((Long[])arr2.toArray())[(int) i])).sum();
+        AtomicLongArray unfilteredDepthHistogramArray = collector.unfilteredDepthHistogramArray;
+        long[] unfilteredDepthHistogramNotAtomicArray = new long[unfilteredDepthHistogramArray.length()];
+        for(int i=0; i<unfilteredDepthHistogramArray.length(); i++)
+            unfilteredDepthHistogramNotAtomicArray[i] = unfilteredDepthHistogramArray.get(i);
+
+        final long sumDepthHisto = LongStream.rangeClosed(0, collector.coverageCap).map(i -> (i * unfilteredDepthHistogramNotAtomicArray[(int)i])).sum();
         if (sumBaseQ != sumDepthHisto) {
             log.error("Coverage and baseQ distributions contain different amount of bases!");
         }
