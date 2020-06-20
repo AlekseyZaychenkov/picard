@@ -173,8 +173,9 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
             collector.setCounter(counter);
 
 
-            if((GC_CALLED_TIMES==0)||((System.currentTimeMillis()-previousCallTime)<GC_ATTEMPT_OF_CALL_FREQUENCY)){
+            if((System.currentTimeMillis()-previousCallTime)>GC_ATTEMPT_OF_CALL_FREQUENCY){
                 System.gc();
+                log.info("Attempting of calling garbage collector");
                 GC_CALLED_TIMES++;
                 previousCallTime = System.currentTimeMillis();
             }
