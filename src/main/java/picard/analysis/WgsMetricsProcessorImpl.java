@@ -33,9 +33,13 @@ import org.broadinstitute.barclay.argparser.Argument;
 import picard.PicardException;
 import picard.filter.CountingFilter;
 import picard.filter.CountingPairedFilter;
+import shaded.cloud_nio.com.google.api.client.util.DateTime;
 
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -72,6 +76,24 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
   /*  Needed for multithreading. Amount of reads in the pack.")  */
     public static final int READS_IN_PACK = 1000;  // Multithreading
 
+    /*
+     program attempts call garbage collector one time per:
+     */
+    private static final long GC_ATTEMPT_OF_CALL_FREQUENCY = 5*60*1000; // in milliseconds
+
+
+    /*
+     garbage collector was already called GC_CALLED_TIMES times
+    */
+    private static int GC_CALLED_TIMES = 0;
+
+
+    /*
+    temporal variable for calling garbage collector
+    */
+    private static long previousCallTime = System.currentTimeMillis();
+
+
 
     private final Log log = Log.getInstance(WgsMetricsProcessorImpl.class);
 
@@ -99,6 +121,8 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
         long counter = 0;
         List<SamLocusIterator.LocusInfo> records = new ArrayList<>(READS_IN_PACK);
         ExecutorService service = Executors.newCachedThreadPool();
+
+
 
         while (iterator.hasNext()) {
             AbstractLocusInfo info = iterator.next();
@@ -147,6 +171,14 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
             }
 
             collector.setCounter(counter);
+
+
+            if((GC_CALLED_TIMES==0)||((System.currentTimeMillis()-previousCallTime)<GC_ATTEMPT_OF_CALL_FREQUENCY)){
+                System.gc();
+                GC_CALLED_TIMES++;
+                previousCallTime = System.currentTimeMillis();
+            }
+
         }
         service.shutdown();
 
