@@ -97,6 +97,11 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
 
     private final Log log = Log.getInstance(WgsMetricsProcessorImpl.class);
 
+
+    boolean DISTRIBUTED_COMPUTING;
+
+    boolean IS_SERVER;
+
     /**
      * @param iterator  input {@link htsjdk.samtools.util.AbstractLocusIterator}
      * @param refWalker over processed reference file
@@ -106,11 +111,15 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
     public WgsMetricsProcessorImpl(AbstractLocusIterator<T, AbstractLocusInfo<T>> iterator,
             ReferenceSequenceFileWalker refWalker,
             AbstractWgsMetricsCollector<T> collector,
-            ProgressLogger progress) {
+            ProgressLogger progress,
+            boolean DISTRIBUTED_COMPUTING,
+            boolean IS_SERVER) {
         this.iterator = iterator;
         this.collector = collector;
         this.refWalker = refWalker;
         this.progress = progress;
+        this.DISTRIBUTED_COMPUTING = DISTRIBUTED_COMPUTING;
+        this.IS_SERVER = IS_SERVER;
     }
 
     /**
@@ -124,10 +133,14 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
 
 
 
+        if(DISTRIBUTED_COMPUTING==true)
+            log.info("DISTRIBUTED_COMPUTING");
+
+
+
         while (iterator.hasNext()) {
             AbstractLocusInfo info = iterator.next();
             ReferenceSequence ref = refWalker.get(info.getSequenceIndex());
-            //System.out.println("<=========Flag 01===========>   "+info);
 
             /* Multithreading */
             // Check that the reference is not N
@@ -175,10 +188,12 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
 
             if((System.currentTimeMillis()-previousCallTime)>GC_ATTEMPT_OF_CALL_FREQUENCY){
                 System.gc();
-                log.info("Attempting of calling garbage collector");
+                log.info("Attempt to call the garbage collector");
                 GC_CALLED_TIMES++;
                 previousCallTime = System.currentTimeMillis();
             }
+            //log.info(service.getQueue().size());
+
 
         }
         service.shutdown();

@@ -148,6 +148,18 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
     @Argument(doc = "Average read length in the file. Default is 150.", optional = true)
     public int READ_LENGTH = 150;
 
+
+    /*
+    DISTRIBUTED COMPUTING
+    */
+    @Argument(doc = "Determines whether the program is in distributed mode or not.")
+    public boolean DISTRIBUTED_COMPUTING = false;
+
+    @Argument(doc = "A role of computer in distributed computing: false(default - client, true - server.")
+    public boolean IS_SERVER = false;
+
+
+
     protected File INTERVALS = null;
 
     private SAMFileHeader header = null;
@@ -255,7 +267,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
     private <T extends AbstractRecordAndOffset> WgsMetricsProcessorImpl<T> getWgsMetricsProcessor(
             ProgressLogger progress, ReferenceSequenceFileWalker refWalker,
             AbstractLocusIterator<T, AbstractLocusInfo<T>> iterator, AbstractWgsMetricsCollector<T> collector) {
-        return new WgsMetricsProcessorImpl<T>(iterator, refWalker, collector, progress);
+        return new WgsMetricsProcessorImpl<T>(iterator, refWalker, collector, progress, DISTRIBUTED_COMPUTING, IS_SERVER);
     }
 
     /** Gets the intervals over which we will calculate metrics. */
