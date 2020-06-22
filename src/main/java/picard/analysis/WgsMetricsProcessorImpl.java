@@ -35,6 +35,10 @@ import picard.filter.CountingFilter;
 import picard.filter.CountingPairedFilter;
 import shaded.cloud_nio.com.google.api.client.util.DateTime;
 
+import java.io.*;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.UnknownHostException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -132,79 +136,197 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
         ExecutorService service = Executors.newCachedThreadPool();
 
 
-
-        if(DISTRIBUTED_COMPUTING==true)
+        // if the program working in mode of DISTRIBUTED_COMPUTING
+        if(DISTRIBUTED_COMPUTING==true) {
             log.info("DISTRIBUTED_COMPUTING");
+            String args[] = {"", ""};
 
+            // if the program working in server mode
+            if(IS_SERVER == false) {
+                String[] address = Arrays.asList("127.0.0.1", "4322").toArray(new String[0]);
 
-
-        while (iterator.hasNext()) {
-            AbstractLocusInfo info = iterator.next();
-            ReferenceSequence ref = refWalker.get(info.getSequenceIndex());
-
-            /* Multithreading */
-            // Check that the reference is not N
-            final byte base = ref.getBases()[info.getPosition() - 1];
-            if (SequenceUtil.isNoCall(base))
-                continue;
-
-            records.add((SamLocusIterator.LocusInfo)info);
-
-
-            // Record progress
-            progress.record(info.getSequenceName(), info.getPosition());
-            if (records.size() < READS_IN_PACK && iterator.hasNext())
-            {
-                continue;
-            }
-
-            final List<SamLocusIterator.LocusInfo> tmpRecords = records;
-            records = new ArrayList<>(READS_IN_PACK);
-
-            // Add read pack to the collector in a separate stream
-            service.submit(new Runnable() {
-                @Override
-                public void run() {
-                    for (SamLocusIterator.LocusInfo rec : tmpRecords) {
-                        boolean referenceBaseN = collector.isReferenceBaseN(info.getPosition(), ref);
-                        collector.addInfo((AbstractLocusInfo) rec, ref, referenceBaseN);
-                        if (referenceBaseN) {
-                            continue;
-                        }
-                      //  progress.record(info.getSequenceName(), info.getPosition());
-                    }
+                if (address.length != 2) {
+                    System.err.println(
+                            "Usage: java EchoClient <host name> <port number>");
                 }
-            });
-            // Perhaps stop
-           // if (usingStopAfter && counter > stopAfter) break;
 
-            // Record progress
-            if (collector.isTimeToStop(++counter)) {
-                break;
+                String hostName = address[0];
+                int portNumber = Integer.parseInt(address[1]);
+
+                try (Socket echoSocket = new Socket(hostName, portNumber);
+                     ObjectOutputStream out =
+                             new ObjectOutputStream(echoSocket.getOutputStream());
+                     BufferedReader in =
+                             new BufferedReader(
+                                     new InputStreamReader(echoSocket.getInputStream()));
+                     BufferedReader stdIn =
+                             new BufferedReader(
+                                     new InputStreamReader(System.in))
+                ) {
+                    String userInput;
+                    while ((userInput = stdIn.readLine()) != null) {
+
+                        out.writeObject((Object) new Integer(0));
+                        out.flush();
+                        String receivedWord = in.readLine();
+                        System.out.println("echo: " + receivedWord);
+                        if (receivedWord.equals("close"))
+                            break;
+                    }
+                    System.out.println("The communication finished");
+                } catch (UnknownHostException e) {
+                    System.err.println("Don't know about host " + hostName);
+                    System.exit(1);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                    System.err.println("Couldn't get I/O for the connection to " +
+                            hostName);
+                    System.exit(1);
+                }
+
+            } else {
+
+
+                args = Arrays.asList("4322").toArray(new String[0]);
+                if (args.length != 1) {
+                    System.err.println("Usage: java EchoServer <port number>");
+                }
+
+                int portNumber = Integer.parseInt(args[0]);
+                try {
+                    ServerSocket serverSocket = new ServerSocket(Integer.parseInt(args[0]));
+                    ExecutorService executorService = Executors.newCachedThreadPool();
+                    // for (int i = 0; i < 3; i++) {
+
+                    executorService.submit(() -> {
+                        try (
+                                Socket clientSocket = serverSocket.accept();
+                                PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
+                                ObjectInputStream in = new ObjectInputStream(new BufferedInputStream(clientSocket.getInputStream()))
+                        ) {
+                            String inputLine = "none";
+
+                            Object objectInput = null;
+                            //System.out.println(in.read());
+
+                            while ((objectInput = in.readObject()) != null) {
+
+                                if (objectInput instanceof String) {
+                                    System.out.println("Is String");
+                                    inputLine = (String) objectInput;
+                                } else {
+                                    System.out.println("Not String");
+                                }
+
+                                if (inputLine.equals("close"))
+                                    break;
+
+                                out.println("***toFormAnswer for "+inputLine);
+                            }
+                            //out.println("Closing connection with server");
+                        } catch (IOException e) {
+                            System.out.println("Exception caught when trying to listen on port " + portNumber + " or listening for a connection");
+                            System.out.println(e.getMessage());
+                        } catch (ClassNotFoundException ec) {
+                            System.out.println("ClassNotFoundException");
+                            System.out.println(ec.getMessage());
+                        }
+                    });
+                    //}
+                    executorService.awaitTermination(5, TimeUnit.MINUTES);
+                    serverSocket.close();
+
+
+                } catch (IOException | InterruptedException e) {
+                    System.out.println("Exception caught when trying create new Cached Thread Pool or await termination");
+                    System.out.println(e.getMessage());
+                }
             }
 
-            collector.setCounter(counter);
+        // if the program working in NOT mode of DISTRIBUTED_COMPUTING
+        } else {
+
+            while (iterator.hasNext()) {
+                AbstractLocusInfo info = iterator.next();
+                ReferenceSequence ref = refWalker.get(info.getSequenceIndex());
+
+                /* Multithreading */
+                // Check that the reference is not N
+                final byte base = ref.getBases()[info.getPosition() - 1];
+                if (SequenceUtil.isNoCall(base))
+                    continue;
+
+                records.add((SamLocusIterator.LocusInfo) info);
 
 
-            if((System.currentTimeMillis()-previousCallTime)>GC_ATTEMPT_OF_CALL_FREQUENCY){
-                System.gc();
-                log.info("Attempt to call the garbage collector");
-                GC_CALLED_TIMES++;
-                previousCallTime = System.currentTimeMillis();
+                // Record progress
+                progress.record(info.getSequenceName(), info.getPosition());
+                if (records.size() < READS_IN_PACK && iterator.hasNext()) {
+                    continue;
+                }
+
+                final List<SamLocusIterator.LocusInfo> tmpRecords = records;
+                records = new ArrayList<>(READS_IN_PACK);
+
+                // Add read pack to the collector in a separate stream
+                service.submit(new Runnable() {
+                    @Override
+                    public void run() {
+                        for (SamLocusIterator.LocusInfo rec : tmpRecords) {
+                            boolean referenceBaseN = collector.isReferenceBaseN(info.getPosition(), ref);
+                            collector.addInfo((AbstractLocusInfo) rec, ref, referenceBaseN);
+                            if (referenceBaseN) {
+                                continue;
+                            }
+                            //  progress.record(info.getSequenceName(), info.getPosition());
+                        }
+                    }
+                });
+                // Perhaps stop
+                // if (usingStopAfter && counter > stopAfter) break;
+
+                // Record progress
+                if (collector.isTimeToStop(++counter)) {
+                    break;
+                }
+
+                collector.setCounter(counter);
+
+
+                if ((System.currentTimeMillis() - previousCallTime) > GC_ATTEMPT_OF_CALL_FREQUENCY) {
+                    System.gc();
+                    log.info("Attempt to call the garbage collector");
+                    GC_CALLED_TIMES++;
+                    previousCallTime = System.currentTimeMillis();
+                }
+                //log.info(service.getQueue().size());
+
+
             }
-            //log.info(service.getQueue().size());
+            service.shutdown();
+
+
+            try {
+                service.awaitTermination(1, TimeUnit.DAYS);
+            } catch (InterruptedException ex) {
+                Logger.getLogger(SinglePassSamProgram.class.getName()).log(Level.SEVERE,
+                        null, ex);
+            }
 
 
         }
-        service.shutdown();
 
 
-        try {
-            service.awaitTermination(1, TimeUnit.DAYS);
-        } catch (InterruptedException ex) {
-            Logger.getLogger(SinglePassSamProgram.class.getName()).log(Level.SEVERE,
-                    null, ex);
-        }
+
+
+
+
+
+
+
+
+
+
 
 
         long unfilteredBaseQHistogramSum = 0;
