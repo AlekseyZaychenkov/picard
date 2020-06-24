@@ -24,6 +24,7 @@
 
 package picard.analysis;
 
+import com.sun.management.OperatingSystemMXBean;
 import htsjdk.samtools.metrics.MetricsFile;
 import htsjdk.samtools.reference.ReferenceSequence;
 import htsjdk.samtools.reference.ReferenceSequenceFileWalker;
@@ -36,6 +37,7 @@ import picard.filter.CountingPairedFilter;
 import shaded.cloud_nio.com.google.api.client.util.DateTime;
 
 import java.io.*;
+import java.lang.management.ManagementFactory;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.UnknownHostException;
@@ -47,7 +49,9 @@ import java.util.Date;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -92,10 +96,13 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
     private static int GC_CALLED_TIMES = 0;
 
 
+
+
     /*
     temporal variable for calling garbage collector
     */
     private static long previousCallTime = System.currentTimeMillis();
+    private static long firstCallTime = System.currentTimeMillis();
 
 
 
@@ -105,6 +112,8 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
     boolean DISTRIBUTED_COMPUTING;
 
     boolean IS_SERVER;
+
+    IntervalList intervalList;
 
     /**
      * @param iterator  input {@link htsjdk.samtools.util.AbstractLocusIterator}
@@ -117,13 +126,15 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
             AbstractWgsMetricsCollector<T> collector,
             ProgressLogger progress,
             boolean DISTRIBUTED_COMPUTING,
-            boolean IS_SERVER) {
+            boolean IS_SERVER,
+            IntervalList intervalList) {
         this.iterator = iterator;
         this.collector = collector;
         this.refWalker = refWalker;
         this.progress = progress;
         this.DISTRIBUTED_COMPUTING = DISTRIBUTED_COMPUTING;
         this.IS_SERVER = IS_SERVER;
+        this.intervalList = intervalList;
     }
 
     /**
@@ -131,10 +142,12 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
      */
     @Override
     public void processFile() {
-        long counter = 0;
-        List<SamLocusIterator.LocusInfo> records = new ArrayList<>(READS_IN_PACK);
-        ExecutorService service = Executors.newCachedThreadPool();
+        final AtomicLong counter = new AtomicLong();
+        final List<SamLocusIterator.LocusInfo> records = new ArrayList<>(READS_IN_PACK);
+     //   ExecutorService service = Executors.newFixedThreadPool(16);
 
+        com.sun.management.OperatingSystemMXBean osBean = ManagementFactory.getPlatformMXBean(OperatingSystemMXBean.class);
+        long pack_counter = 0;
 
         // if the program working in mode of DISTRIBUTED_COMPUTING
         if(DISTRIBUTED_COMPUTING==true) {
@@ -243,89 +256,181 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
                 }
             }
 
+
         // if the program working in NOT mode of DISTRIBUTED_COMPUTING
         } else {
 
+
+            System.out.println("intervalList.toString() : "+intervalList.toString());
+            List<Interval> intervalCollectionList = intervalList.getIntervals();
+            int c = 0;
+           /* for(Interval i : intervalCollectionList) {
+                System.out.println("( " + (++c) + " )");
+                System.out.println("i.toString() : " + i.toString());
+                System.out.println("i.getStart() : " + i.getStart());
+                System.out.println("i.length() : " + i.length());
+                System.out.println("i.getContig() : " + i.getContig());
+                System.out.println("i.countBases(intervalCollectionList) : " + i.countBases(intervalCollectionList));
+*/
+
+
+
+
             while (iterator.hasNext()) {
-                AbstractLocusInfo info = iterator.next();
-                ReferenceSequence ref = refWalker.get(info.getSequenceIndex());
-
-                /* Multithreading */
-                // Check that the reference is not N
-                final byte base = ref.getBases()[info.getPosition() - 1];
-                if (SequenceUtil.isNoCall(base))
-                    continue;
-
-                records.add((SamLocusIterator.LocusInfo) info);
+                //synchronized (collector) {
+                    final AbstractLocusInfo<T> info = iterator.next();
+                    final ReferenceSequence ref = refWalker.get(info.getSequenceIndex());
 
 
-                // Record progress
-                progress.record(info.getSequenceName(), info.getPosition());
-                if (records.size() < READS_IN_PACK && iterator.hasNext()) {
-                    continue;
-                }
+                    final boolean referenceBaseN = collector.isReferenceBaseN(info.getPosition(), ref);
 
-                final List<SamLocusIterator.LocusInfo> tmpRecords = records;
-                records = new ArrayList<>(READS_IN_PACK);
+                    collector.addInfo(info, ref, referenceBaseN);
 
-                // Add read pack to the collector in a separate stream
-                service.submit(new Runnable() {
-                    @Override
-                    public void run() {
-                        for (SamLocusIterator.LocusInfo rec : tmpRecords) {
-                            boolean referenceBaseN = collector.isReferenceBaseN(info.getPosition(), ref);
-                            collector.addInfo((AbstractLocusInfo) rec, ref, referenceBaseN);
-                            if (referenceBaseN) {
-                                continue;
-                            }
-                            //  progress.record(info.getSequenceName(), info.getPosition());
-                        }
+                    if (referenceBaseN) {
+                        continue;
                     }
-                });
-                // Perhaps stop
-                // if (usingStopAfter && counter > stopAfter) break;
 
-                // Record progress
-                if (collector.isTimeToStop(++counter)) {
-                    break;
-                }
+                    progress.record(info.getSequenceName(), info.getPosition());
+              //  }
 
-                collector.setCounter(counter);
-
-
-                if ((System.currentTimeMillis() - previousCallTime) > GC_ATTEMPT_OF_CALL_FREQUENCY) {
-                    System.gc();
-                    log.info("Attempt to call the garbage collector");
-                    GC_CALLED_TIMES++;
-                    previousCallTime = System.currentTimeMillis();
-                }
-                //log.info(service.getQueue().size());
-
+                    if (collector.isTimeToStop(counter.incrementAndGet())) {
+                        break;
+                    }
+                    collector.setCounter(counter.get());
 
             }
-            service.shutdown();
 
 
-            try {
+
+
+               /* while (iterator.hasNext()) {
+
+
+                    AbstractLocusInfo info = iterator.next();
+                    pack_counter++;
+                    //  long placeToStart = 10 * 100 * 1000 * 1000L + 1;
+                    //   if (pack_counter >= placeToStart) {
+                    // System.out.println(pack_counter +" >= "+ placeToStart+" : "+(pack_counter >= placeToStart));
+
+                    ReferenceSequence ref = refWalker.get(info.getSequenceIndex());
+
+
+                    /* Multithreading */
+                    // Check that the reference is not N
+
+
+                /*
+
+
+
+
+                    final byte base = ref.getBases()[info.getPosition() - 1];
+
+                    if ((SequenceUtil.isNoCall(base)))
+                        continue;
+
+                    records.add((SamLocusIterator.LocusInfo) info);
+
+                    // Record progress
+                    progress.record(info.getSequenceName(), info.getPosition());
+                    if ((records.size() < READS_IN_PACK && iterator.hasNext()))
+                        continue;
+
+                    final List<SamLocusIterator.LocusInfo> tmpRecords = records;
+                    records = new ArrayList<>(READS_IN_PACK);
+
+
+                    // Add read pack to the collector in a separate stream
+                  /*  service.submit(new Runnable() {
+                        @Override
+                        public void run() {*/
+
+
+                   /*
+
+
+
+                            for (SamLocusIterator.LocusInfo rec : tmpRecords) {
+
+                                boolean referenceBaseN = collector.isReferenceBaseN(info.getPosition(), ref);
+                                collector.addInfo((AbstractLocusInfo) rec, ref, referenceBaseN);
+                                if (referenceBaseN) {
+                                    continue;
+                                }
+                                //  progress.record(info.getSequenceName(), info.getPosition());
+                            }
+                        /*}
+                    });*/
+
+                    // Perhaps stop
+                    // if (usingStopAfter && counter > stopAfter) break;
+
+
+                    // Record progress
+
+            /*
+
+
+                    if (collector.isTimeToStop(counter.incrementAndGet())) {
+                        break;
+                    }
+                    collector.setCounter(counter.get());
+                    //  }
+
+
+
+               /* if ((System.currentTimeMillis() - previousCallTime) > GC_ATTEMPT_OF_CALL_FREQUENCY) {
+                     System.gc();
+                     log.info("Attempt to call the garbage collector");
+                     GC_CALLED_TIMES++;
+                     previousCallTime = System.currentTimeMillis();
+                }*/
+
+
+               /*     if ((System.currentTimeMillis() - previousCallTime) > 30 * 1000) {
+                        //service2 = (ThreadPoolExecutor)service;
+                        double diff = (((double) System.currentTimeMillis() - (double) firstCallTime) / 60000);
+                        previousCallTime = System.currentTimeMillis();
+                        System.out.println("Elapsed time in WgsProcessor: " + diff + " min");
+                        System.out.println("info.getStart(): " + info.getStart());
+                        System.out.println("pack_counter: " + pack_counter);
+*/
+
+
+                   /* log.info("service2.getQueue().size() "+service2.getQueue().size());
+                    log.info("service2.getActiveCount() "+service2.	getActiveCount());
+                    log.info("service2.getCompletedTaskCount() "+service2.getCompletedTaskCount());
+                   // log.info("service2.getKeepAliveTime(NANOSECONDS) "+service2.getKeepAliveTime(TimeUnit.NANOSECONDS));
+
+                 //   System.out.println("ProcessCpuLoad: "+osBean.getProcessCpuLoad() * 100);
+                //    System.out.println("SystemCpuLoad: "+osBean.getSystemCpuLoad()  * 100);
+*/
+                 //   }
+
+             //   }
+
+
+          /*  }*/
+         //   service.shutdown();
+
+
+
+
+
+
+
+
+          /*  try {
                 service.awaitTermination(1, TimeUnit.DAYS);
             } catch (InterruptedException ex) {
                 Logger.getLogger(SinglePassSamProgram.class.getName()).log(Level.SEVERE,
                         null, ex);
             }
-
+*/
 
         }
 
-
-
-
-
-
-
-
-
-
-
+/*
 
 
 
@@ -358,6 +463,12 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
         if (sumBaseQ != sumDepthHisto) {
             log.error("Coverage and baseQ distributions contain different amount of bases!");
         }
+
+        */
+
+
+
+
     }
 
     @Override

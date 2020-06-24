@@ -48,6 +48,7 @@ import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.ArgumentCollection;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
+import picard.PicardException;
 import picard.cmdline.CommandLineProgram;
 import picard.cmdline.StandardOptionDefinitions;
 import picard.cmdline.argumentcollections.IntervalArgumentCollection;
@@ -65,6 +66,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLongArray;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.stream.LongStream;
 
 import static picard.cmdline.StandardOptionDefinitions.MINIMUM_MAPPING_QUALITY_SHORT_NAME;
 
@@ -164,7 +170,11 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
     private SAMFileHeader header = null;
 
-    private final Log log = Log.getInstance(CollectWgsMetrics.class);
+    private static final Log log = Log.getInstance(CollectWgsMetrics.class);
+
+
+    final static ProgressLogger progress = new ProgressLogger(log, 10000000, "Processed", "loci");
+
 
     @Override
     protected boolean requiresReference() {
@@ -219,10 +229,10 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
         }
 
         // Setup all the inputs
-        final ProgressLogger progress = new ProgressLogger(log, 10000000, "Processed", "loci");
-        final ReferenceSequenceFileWalker refWalker = new ReferenceSequenceFileWalker(REFERENCE_SEQUENCE);
-        final SamReader in = getSamReader();
-        final AbstractLocusIterator iterator = getLocusIterator(in);
+
+        final ReferenceSequenceFileWalker refWalkerFirst = new ReferenceSequenceFileWalker(REFERENCE_SEQUENCE);
+        final SamReader inFirst = getSamReader();
+
 
         final List<SamRecordFilter> filters = new ArrayList<>();
         final CountingFilter adapterFilter = new CountingAdapterFilter();
@@ -237,17 +247,101 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
         if (!COUNT_UNPAIRED) {
             filters.add(pairFilter);
         }
-        iterator.setSamFilters(filters);
-        iterator.setMappingQualityScoreCutoff(0); // Handled separately because we want to count bases
-        iterator.setIncludeNonPfReads(false);
 
         final AbstractWgsMetricsCollector<?> collector = getCollector(COVERAGE_CAP, getIntervalsToExamine());
-        final WgsMetricsProcessor processor = getWgsMetricsProcessor(progress, refWalker, iterator, collector);
-        processor.processFile();
+        final AbstractLocusIterator iteratorFirst = getLocusIterator(inFirst);
 
-        final MetricsFile<WgsMetrics, Integer> out = getMetricsFile();
-        processor.addToMetricsFile(out, INCLUDE_BQ_HISTOGRAM, dupeFilter, adapterFilter, mapqFilter, pairFilter);
+        IntervalList intervalList = getIntervalsToExamine();
+        List<Interval> intervalCollectionList = intervalList.getIntervals();
+        int c = 0;
+
+        WgsMetricsProcessor processorFirst = getWgsMetricsProcessor(progress, refWalkerFirst, iteratorFirst, collector);
+
+
+        ExecutorService service = Executors.newCachedThreadPool();
+
+        for(Interval i : intervalCollectionList) {
+            final int count = ++c;
+
+            final ReferenceSequenceFileWalker refWalker = new ReferenceSequenceFileWalker(REFERENCE_SEQUENCE);
+            final SamReader in = getSamReader();
+            final AbstractLocusIterator iterator = getLocusIteratorFromInterval(in, i);
+
+            service.submit(new Runnable() {
+                @Override
+                public void run() {
+
+                    synchronized (this) {
+                        iterator.setSamFilters(filters);
+                        iterator.setMappingQualityScoreCutoff(0); // Handled separately because we want to count bases
+                        iterator.setIncludeNonPfReads(false);
+                    }
+                    System.out.println("( " + (count) + " )");
+                    System.out.println("i.toString() : " + i.toString());
+                    System.out.println("i.getStart() : " + i.getStart());
+                    System.out.println("i.length() : " + i.length());
+                    System.out.println("i.getContig() : " + i.getContig());
+                    System.out.println("i.countBases(intervalCollectionList) : " + i.countBases(intervalCollectionList));
+
+
+                    final  WgsMetricsProcessor processor = getWgsMetricsProcessor(progress, refWalker, iterator, collector);
+
+
+                    processor.processFile();
+                }
+            });
+
+        }
+
+        service.shutdown();
+
+        try {
+            service.awaitTermination(1, TimeUnit.DAYS);
+        } catch (InterruptedException ex) {
+            Logger.getLogger(SinglePassSamProgram.class.getName()).log(Level.SEVERE,
+                    null, ex);
+        }
+
+
+
+        long unfilteredBaseQHistogramSum = 0;
+        long unfilteredDepthHistogramSum = 0;
+        for (int i = 0; i < collector.unfilteredBaseQHistogramArray.length(); ++i) {
+            unfilteredBaseQHistogramSum += collector.unfilteredBaseQHistogramArray.get(i);
+        }
+        for (int i = 0; i <= collector.coverageCap; ++i) {
+            unfilteredDepthHistogramSum += i*collector.unfilteredDepthHistogramArray.get(i);
+        }
+        if (unfilteredBaseQHistogramSum != unfilteredDepthHistogramSum) {
+            throw new PicardException("updated coverage and baseQ distributions unequally");
+        }
+
+
+        // check that we added the same number of bases to the raw coverage histogram and the base quality histograms
+        AtomicLongArray unfilteredBaseQHistogramArray = collector.unfilteredBaseQHistogramArray;
+        long sum = 0;
+        for(int i=0; i<unfilteredBaseQHistogramArray.length(); i++)
+            sum += unfilteredBaseQHistogramArray.get(i);
+        final long sumBaseQ = sum;
+
+        AtomicLongArray unfilteredDepthHistogramArray = collector.unfilteredDepthHistogramArray;
+        long[] unfilteredDepthHistogramNotAtomicArray = new long[unfilteredDepthHistogramArray.length()];
+        for(int i=0; i<unfilteredDepthHistogramArray.length(); i++)
+            unfilteredDepthHistogramNotAtomicArray[i] = unfilteredDepthHistogramArray.get(i);
+
+        final long sumDepthHisto = LongStream.rangeClosed(0, collector.coverageCap).map(i -> (i * unfilteredDepthHistogramNotAtomicArray[(int)i])).sum();
+        if (sumBaseQ != sumDepthHisto) {
+            log.error("Coverage and baseQ distributions contain different amount of bases!");
+        }
+
+            final MetricsFile<WgsMetrics, Integer> out = getMetricsFile();
+
+            processorFirst.addToMetricsFile(out, INCLUDE_BQ_HISTOGRAM, dupeFilter, adapterFilter, mapqFilter, pairFilter);
+
+
         out.write(OUTPUT);
+
+
 
         if (THEORETICAL_SENSITIVITY_OUTPUT != null) {
             // Write out theoretical sensitivity results.
@@ -264,10 +358,10 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
 
 
-    private <T extends AbstractRecordAndOffset> WgsMetricsProcessorImpl<T> getWgsMetricsProcessor(
+    private synchronized <T extends AbstractRecordAndOffset> WgsMetricsProcessorImpl<T> getWgsMetricsProcessor(
             ProgressLogger progress, ReferenceSequenceFileWalker refWalker,
             AbstractLocusIterator<T, AbstractLocusInfo<T>> iterator, AbstractWgsMetricsCollector<T> collector) {
-        return new WgsMetricsProcessorImpl<T>(iterator, refWalker, collector, progress, DISTRIBUTED_COMPUTING, IS_SERVER);
+        return new WgsMetricsProcessorImpl<T>(iterator, refWalker, collector, progress, DISTRIBUTED_COMPUTING, IS_SERVER, getIntervalsToExamine());
     }
 
     /** Gets the intervals over which we will calculate metrics. */
@@ -395,6 +489,30 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
         return iterator;
     }
 
+    protected AbstractLocusIterator getLocusIteratorFromInterval(final SamReader in, Interval interval) {
+        if (USE_FAST_ALGORITHM) {
+            return (INTERVALS != null) ? new EdgeReadIterator(in, IntervalList.fromFile(INTERVALS)) : new EdgeReadIterator(in);
+        }
+        final IntervalList intervalList_01 = getIntervalsToExamine();
+        final IntervalList intervalList_02 = getIntervalsToExamine();
+        final IntervalList intervalList = intervalList_01.subtract(intervalList_01, intervalList_02);
+        intervalList.add(interval);
+
+      /*  List<Interval> list= intervalList.getIntervals();
+
+       for (Interval i : list)
+           System.out.println("1)   i.toString() : "+i.toString());*/
+
+
+
+
+        SamLocusIterator iterator = new SamLocusIterator(in, intervalList);
+        iterator.setMaxReadsToAccumulatePerLocus(LOCUS_ACCUMULATION_CAP);
+        iterator.setEmitUncoveredLoci(true);
+        iterator.setQualityScoreCutoff(0);
+        return iterator;
+    }
+
     /**
      * Creates {@link picard.analysis.AbstractWgsMetricsCollector} implementation according to {@link this#USE_FAST_ALGORITHM} value.
      *
@@ -416,6 +534,9 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
         @Override
         public void addInfo(final AbstractLocusInfo<SamLocusIterator.RecordAndOffset> info, final ReferenceSequence ref, boolean referenceBaseN) {
+           /* if(info.getStart()<100000000)
+                return;
+*/
 
             if (referenceBaseN) {
                 return;
