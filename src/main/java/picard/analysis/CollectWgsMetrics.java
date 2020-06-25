@@ -267,15 +267,13 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
             final SamReader in = getSamReader();
             final AbstractLocusIterator iterator = getLocusIteratorFromInterval(in, i);
 
-            service.submit(new Runnable() {
-                @Override
-                public void run() {
 
-                    synchronized (this) {
-                        iterator.setSamFilters(filters);
-                        iterator.setMappingQualityScoreCutoff(0); // Handled separately because we want to count bases
-                        iterator.setIncludeNonPfReads(false);
-                    }
+
+
+                   iterator.setSamFilters(filters);
+                   iterator.setMappingQualityScoreCutoff(0); // Handled separately because we want to count bases
+                   iterator.setIncludeNonPfReads(false);
+
                     System.out.println("( " + (count) + " )");
                     System.out.println("i.toString() : " + i.toString());
                     System.out.println("i.getStart() : " + i.getStart());
@@ -288,8 +286,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
 
                     processor.processFile();
-                }
-            });
+
 
         }
 
