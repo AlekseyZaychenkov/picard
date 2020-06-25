@@ -216,6 +216,49 @@ public abstract class AbstractWgsMetricsCollector<T extends AbstractRecordAndOff
         return usingStopAfter && processedLoci > collectWgsMetrics.STOP_AFTER - 1;
     }
 
+
+    public AbstractWgsMetricsCollector combineDataWith(AbstractWgsMetricsCollector otherCollector){
+
+        AbstractWgsMetricsCollector combinedCollector  = new CollectWgsMetrics.WgsMetricsCollector(this.collectWgsMetrics, this.coverageCap, this.intervals);
+
+        for(int i=0; i<combinedCollector.unfilteredDepthHistogramArray.length(); i++){
+            long a = this.unfilteredDepthHistogramArray.get(i);
+            long b = otherCollector.unfilteredDepthHistogramArray.get(i);
+            combinedCollector.unfilteredDepthHistogramArray.set(i, (a+b));
+        }
+
+        for(int i=0; i<combinedCollector.unfilteredDepthHistogramArray.length(); i++){
+            long a = this.unfilteredBaseQHistogramArray.get(i);
+            long b = otherCollector.unfilteredBaseQHistogramArray.get(i);
+            combinedCollector.unfilteredBaseQHistogramArray.set(i, (a+b));
+        }
+
+        for(int i=0; i<combinedCollector.highQualityDepthHistogramArray.length(); i++){
+            long a = this.highQualityDepthHistogramArray.get(i);
+            long b = otherCollector.highQualityDepthHistogramArray.get(i);
+            combinedCollector.highQualityDepthHistogramArray.set(i, (a+b));
+        }
+
+        long a = this.basesExcludedByBaseq.get();
+        long b = otherCollector.basesExcludedByBaseq.get();
+        combinedCollector.basesExcludedByBaseq.set((a+b));
+
+        a = this.basesExcludedByOverlap.get();
+        b = otherCollector.basesExcludedByOverlap.get();
+        combinedCollector.basesExcludedByOverlap.set((a+b));
+
+        a = this.basesExcludedByCapping.get();
+        b = otherCollector.basesExcludedByCapping.get();
+        combinedCollector.basesExcludedByCapping.set((a+b));
+
+        a = this.counter;
+        b = otherCollector.counter;
+        combinedCollector.counter = (a+b);
+
+
+        return combinedCollector;
+    }
+
     /**
      * Sets the counter to the current number of processed loci. Counter, must be updated
      * from outside, since we are skipping a no call reference positions outside of the collector

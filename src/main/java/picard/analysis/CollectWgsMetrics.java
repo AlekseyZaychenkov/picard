@@ -59,7 +59,10 @@ import picard.filter.CountingFilter;
 import picard.filter.CountingMapQFilter;
 import picard.filter.CountingPairedFilter;
 
-import java.io.File;
+import java.io.*;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -158,11 +161,19 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
     /*
     DISTRIBUTED COMPUTING
     */
-    @Argument(doc = "Determines whether the program is in distributed mode or not.")
+
+    @Argument(doc = "A role of computer in distributed computing: default - false.")
+    public boolean IS_SERVER;
+
+    @Argument(doc = "A role of computer in distributed computing: default - false.")
+    public boolean IS_CLIENT;
+
     public boolean DISTRIBUTED_COMPUTING = false;
 
-    @Argument(doc = "A role of computer in distributed computing: false(default - client, true - server.")
-    public boolean IS_SERVER = false;
+    @Argument(doc = "Amount of locus, that should calculate on remote computer")
+    public final long CALCULATE_ON_SERVER = 1000000000L;
+
+    public long have_sent_to_server = 0;
 
 
 
@@ -173,7 +184,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
     private static final Log log = Log.getInstance(CollectWgsMetrics.class);
 
 
-    final static ProgressLogger progress = new ProgressLogger(log, 10000000, "Processed", "loci");
+    final ProgressLogger progress = new ProgressLogger(log, 10000000, "Processed", "loci");
 
 
     @Override
@@ -211,6 +222,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
     @Override
     protected int doWork() {
+        DISTRIBUTED_COMPUTING = IS_SERVER||IS_CLIENT;
         IOUtil.assertFileIsReadable(INPUT);
         IOUtil.assertFileIsWritable(OUTPUT);
         IOUtil.assertFileIsReadable(REFERENCE_SEQUENCE);
@@ -247,71 +259,246 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
         if (!COUNT_UNPAIRED) {
             filters.add(pairFilter);
         }
+        final ExecutorService service = Executors.newCachedThreadPool();
 
         final AbstractWgsMetricsCollector<?> collector = getCollector(COVERAGE_CAP, getIntervalsToExamine());
+        AbstractWgsMetricsCollector<?> serverCollector = null;
+
+
         final AbstractLocusIterator iteratorFirst = getLocusIterator(inFirst);
-
-        IntervalList intervalList = getIntervalsToExamine();
-        List<Interval> intervalCollectionList = intervalList.getIntervals();
-        int c = 0;
-
-        WgsMetricsProcessor processorFirst = getWgsMetricsProcessor(progress, refWalkerFirst, iteratorFirst, collector);
+        WgsMetricsProcessor processorFirst = getWgsMetricsProcessor(progress, refWalkerFirst, iteratorFirst, collector, service);
 
 
-        ExecutorService service = Executors.newCachedThreadPool();
+        final IntervalList intervalList_01 = getIntervalsToExamine();
+        final IntervalList intervalList_02 = getIntervalsToExamine();
+        IntervalList newIntervalList = intervalList_01.subtract(intervalList_01, intervalList_02);
 
-        for(Interval i : intervalCollectionList) {
-            final int count = ++c;
-
-            final ReferenceSequenceFileWalker refWalker = new ReferenceSequenceFileWalker(REFERENCE_SEQUENCE);
-            final SamReader in = getSamReader();
-            final AbstractLocusIterator iterator = getLocusIteratorFromInterval(in, i);
+        int newIntervalListLength = 0;
+        List<Interval> intervalCollectionList = getIntervalsToExamine().getIntervals();
 
 
 
+        // if the program working in mode of DISTRIBUTED_COMPUTING
+        if(DISTRIBUTED_COMPUTING==true) {
+            log.info("DISTRIBUTED_COMPUTING");
+            String args[] = {"", ""};
 
-                   iterator.setSamFilters(filters);
-                   iterator.setMappingQualityScoreCutoff(0); // Handled separately because we want to count bases
-                   iterator.setIncludeNonPfReads(false);
+            // if the program working in cliet's mode
+            if(IS_CLIENT == true) {
+                log.info("CLIENTS'S MODE");
+                String[] address = Arrays.asList("127.0.0.1", "4322").toArray(new String[0]);
 
-                    System.out.println("( " + (count) + " )");
-                    System.out.println("i.toString() : " + i.toString());
-                    System.out.println("i.getStart() : " + i.getStart());
-                    System.out.println("i.length() : " + i.length());
-                    System.out.println("i.getContig() : " + i.getContig());
-                    System.out.println("i.countBases(intervalCollectionList) : " + i.countBases(intervalCollectionList));
+                if (address.length != 2)
+                    System.err.println(
+                            "Usage: java EchoClient <host name> <port number>");
+
+                System.out.println("Flag 01");
+                String hostName = address[0];
+                int portNumber = Integer.parseInt(address[1]);
+
+                System.out.println("Flag 02");
+                try (Socket echoSocket = new Socket(hostName, portNumber);
+                     ObjectOutputStream out =
+                             new ObjectOutputStream(
+                                    new BufferedOutputStream(
+                                        echoSocket.getOutputStream()));
+                     ObjectInputStream in =
+                             new ObjectInputStream(
+                                     new BufferedInputStream(
+                                        echoSocket.getInputStream())
+                             );
+                     BufferedReader stdIn =
+                             new BufferedReader(
+                                     new InputStreamReader(System.in))
+                ) {
+                    System.out.println("Flag 03");
+
+                    for (Interval i : intervalCollectionList) {
+                        final ReferenceSequenceFileWalker refWalker = new ReferenceSequenceFileWalker(REFERENCE_SEQUENCE);
+                        final SamReader inSamReader = getSamReader();
+
+                        newIntervalList.add(i);
+                        newIntervalListLength += i.length();
+                        if ((newIntervalListLength >= 250000000L) || (i.equals(intervalCollectionList.get(intervalCollectionList.size() - 1)))) {
+                            final IntervalList tempIntervalList = newIntervalList;
+                            newIntervalList = intervalList_01.subtract(intervalList_01, intervalList_02);
+
+                            if (have_sent_to_server <= CALCULATE_ON_SERVER) {
+                                have_sent_to_server += newIntervalListLength;
+                                out.writeObject(tempIntervalList);
+                                out.flush();
+                            } else {
+                                final AbstractLocusIterator iterator = getLocusIteratorFromInterval(inSamReader, tempIntervalList);
+
+                                iterator.setSamFilters(filters);
+                                iterator.setMappingQualityScoreCutoff(0); // Handled separately because we want to count bases
+                                iterator.setIncludeNonPfReads(false);
+
+                                List<Interval> intervalsCollectionList = tempIntervalList.getIntervals();
+                                for (Interval inter : intervalsCollectionList)
+                                    System.out.println("inter.toString() : " + inter.toString());
+
+                                final WgsMetricsProcessor processor = getWgsMetricsProcessor(progress, refWalker, iterator, collector, service);
+                                processor.processFile();
+                            }
+                            newIntervalListLength = 0;
+                        }
+                    }
+                    String userInput;
+                    while ((userInput = stdIn.readLine()) != null) {
+                        out.writeObject(new String("waiting_for_you"));
+                        out.flush();
+                        System.out.println("Waiting for answer from server");
+
+                        Object receivedObject = (Object) in.readObject();
+                        if(receivedObject instanceof AbstractWgsMetricsCollector)
+                            serverCollector = (AbstractWgsMetricsCollector)in.readObject();
+
+                        try {
+                            Thread.sleep(10 * 1000);
+                        } catch (InterruptedException ie) {
+                        }
+                    }
+                    System.out.println("The communication finished");
+                } catch (ClassNotFoundException cnfe){
+                    System.err.println("Server response not recognized " + cnfe.getMessage());
+                } catch (UnknownHostException e) {
+                    System.err.println("Don't know about host " + hostName);
+                    System.exit(1);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                    System.err.println("Couldn't get I/O for the connection to " +
+                            hostName);
+                    System.exit(1);
+                }
+
+                System.out.println("Flag END computation");
+
+            } else {
+                log.info("SERVER'S MODE");
+                args = Arrays.asList("4322").toArray(new String[0]);
+                if (args.length != 1)
+                    System.err.println("Usage: java EchoServer <port number>");
+
+                System.out.println("Flag 01");
 
 
-                    final  WgsMetricsProcessor processor = getWgsMetricsProcessor(progress, refWalker, iterator, collector);
+                int portNumber = Integer.parseInt(args[0]);
+                try {
+                    ServerSocket serverSocket = new ServerSocket(Integer.parseInt(args[0]));
+
+                    System.out.println("Flag 02");
+                    try (
+                            Socket clientSocket = serverSocket.accept();
+                            ObjectOutputStream out = new ObjectOutputStream(
+                                        clientSocket.getOutputStream());
+                            ObjectInputStream in = new ObjectInputStream(
+                                        clientSocket.getInputStream())
+                    ) {
+                        System.out.println("Flag 03");
+                        String inputLine = "none";
+
+                        Object objectInput = null;
+                        //System.out.println(in.read());
+                        IntervalList tempIntervalList = null;
+
+                        while ((objectInput = in.readObject()) != null) {
+
+                            if (objectInput instanceof String) {
+                                System.out.println("Is String");
+                                inputLine = (String) objectInput;
+                                if (inputLine.equals("waiting_for_you"))
+                                    break;
+                            } else {
+                                System.out.println("Not String");
+                                if (objectInput instanceof IntervalList) {
+                                    System.out.println("Is IntervalList");
+                                    tempIntervalList = (IntervalList) objectInput;
+
+                                    final ReferenceSequenceFileWalker refWalker = new ReferenceSequenceFileWalker(REFERENCE_SEQUENCE);
+                                    final SamReader inSamReader = getSamReader();
+
+                                    final AbstractLocusIterator iterator = getLocusIteratorFromInterval(inSamReader, tempIntervalList);
+
+                                    iterator.setSamFilters(filters);
+                                    iterator.setMappingQualityScoreCutoff(0); // Handled separately because we want to count bases
+                                    iterator.setIncludeNonPfReads(false);
+
+                                    List<Interval> intervalsCollectionList = tempIntervalList.getIntervals();
+                                    for (Interval inter : intervalsCollectionList)
+                                        System.out.println("inter.toString() : " + inter.toString());
+
+                                    final WgsMetricsProcessor processor = getWgsMetricsProcessor(progress, refWalker, iterator, collector, service);
+                                    processor.processFile();
+                                }
+                                System.out.println("Unknown input file's format");
+                            }
+
+                            out.writeObject(collector);
+                            out.flush();
+                        }
 
 
+                        //out.println("Closing connection with server");
+                    } catch (IOException e) {
+                        System.out.println("Exception caught when trying to listen on port " + portNumber + " or listening for a connection");
+                        System.out.println(e.getMessage());
+                    } catch (ClassNotFoundException ec) {
+                        System.out.println("ClassNotFoundException");
+                        System.out.println(ec.getMessage());
+                    }
+
+                    serverSocket.close();
+
+                } catch (IOException e) {
+                    System.out.println("Exception caught when trying create new Cached Thread Pool or await termination");
+                    System.out.println(e.getMessage());
+                }
+            }
+
+
+            // if the program working in NOT mode of DISTRIBUTED_COMPUTING
+        } else {
+            for (Interval i : intervalCollectionList) {
+                final ReferenceSequenceFileWalker refWalker = new ReferenceSequenceFileWalker(REFERENCE_SEQUENCE);
+                final SamReader in = getSamReader();
+
+                newIntervalList.add(i);
+                newIntervalListLength += i.length();
+                if ((newIntervalListLength >= 250000000L) || (i.equals(intervalCollectionList.get(intervalCollectionList.size() - 1)))) {
+                    final IntervalList tempIntervalList = newIntervalList;
+                    newIntervalList = intervalList_01.subtract(intervalList_01, intervalList_02);
+                    newIntervalListLength = 0;
+
+                    final AbstractLocusIterator iterator = getLocusIteratorFromInterval(in, tempIntervalList);
+
+                    iterator.setSamFilters(filters);
+                    iterator.setMappingQualityScoreCutoff(0); // Handled separately because we want to count bases
+                    iterator.setIncludeNonPfReads(false);
+
+                    List<Interval> intervalsCollectionList = tempIntervalList.getIntervals();
+                    for (Interval inter : intervalsCollectionList)
+                        System.out.println("inter.toString() : " + inter.toString());
+
+                    final WgsMetricsProcessor processor = getWgsMetricsProcessor(progress, refWalker, iterator, collector, service);
                     processor.processFile();
-
+                }
+            }
 
         }
 
-        service.shutdown();
-
-        try {
-            service.awaitTermination(1, TimeUnit.DAYS);
-        } catch (InterruptedException ex) {
-            Logger.getLogger(SinglePassSamProgram.class.getName()).log(Level.SEVERE,
-                    null, ex);
-        }
-
+        if (serverCollector != null)
+            collector.combineDataWith(serverCollector);
 
 
         long unfilteredBaseQHistogramSum = 0;
         long unfilteredDepthHistogramSum = 0;
-        for (int i = 0; i < collector.unfilteredBaseQHistogramArray.length(); ++i) {
+        for (int i = 0; i < collector.unfilteredBaseQHistogramArray.length(); ++i)
             unfilteredBaseQHistogramSum += collector.unfilteredBaseQHistogramArray.get(i);
-        }
-        for (int i = 0; i <= collector.coverageCap; ++i) {
+        for (int i = 0; i <= collector.coverageCap; ++i)
             unfilteredDepthHistogramSum += i*collector.unfilteredDepthHistogramArray.get(i);
-        }
-        if (unfilteredBaseQHistogramSum != unfilteredDepthHistogramSum) {
+        if (unfilteredBaseQHistogramSum != unfilteredDepthHistogramSum)
             throw new PicardException("updated coverage and baseQ distributions unequally");
-        }
 
 
         // check that we added the same number of bases to the raw coverage histogram and the base quality histograms
@@ -329,6 +516,18 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
         final long sumDepthHisto = LongStream.rangeClosed(0, collector.coverageCap).map(i -> (i * unfilteredDepthHistogramNotAtomicArray[(int)i])).sum();
         if (sumBaseQ != sumDepthHisto) {
             log.error("Coverage and baseQ distributions contain different amount of bases!");
+        }
+
+
+
+        service.shutdown();
+
+
+        try {
+            service.awaitTermination(1, TimeUnit.DAYS);
+        } catch (InterruptedException ex) {
+            Logger.getLogger(SinglePassSamProgram.class.getName()).log(Level.SEVERE,
+                    null, ex);
         }
 
             final MetricsFile<WgsMetrics, Integer> out = getMetricsFile();
@@ -357,8 +556,8 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
     private synchronized <T extends AbstractRecordAndOffset> WgsMetricsProcessorImpl<T> getWgsMetricsProcessor(
             ProgressLogger progress, ReferenceSequenceFileWalker refWalker,
-            AbstractLocusIterator<T, AbstractLocusInfo<T>> iterator, AbstractWgsMetricsCollector<T> collector) {
-        return new WgsMetricsProcessorImpl<T>(iterator, refWalker, collector, progress, DISTRIBUTED_COMPUTING, IS_SERVER, getIntervalsToExamine());
+            AbstractLocusIterator<T, AbstractLocusInfo<T>> iterator, AbstractWgsMetricsCollector<T> collector, ExecutorService service) {
+        return new WgsMetricsProcessorImpl<T>(iterator, refWalker, collector, progress, DISTRIBUTED_COMPUTING, IS_SERVER, getIntervalsToExamine(), service);
     }
 
     /** Gets the intervals over which we will calculate metrics. */
@@ -486,21 +685,15 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
         return iterator;
     }
 
-    protected AbstractLocusIterator getLocusIteratorFromInterval(final SamReader in, Interval interval) {
+    protected AbstractLocusIterator getLocusIteratorFromInterval(final SamReader in, IntervalList intervalList) {
         if (USE_FAST_ALGORITHM) {
             return (INTERVALS != null) ? new EdgeReadIterator(in, IntervalList.fromFile(INTERVALS)) : new EdgeReadIterator(in);
         }
-        final IntervalList intervalList_01 = getIntervalsToExamine();
-        final IntervalList intervalList_02 = getIntervalsToExamine();
-        final IntervalList intervalList = intervalList_01.subtract(intervalList_01, intervalList_02);
-        intervalList.add(interval);
 
       /*  List<Interval> list= intervalList.getIntervals();
 
        for (Interval i : list)
            System.out.println("1)   i.toString() : "+i.toString());*/
-
-
 
 
         SamLocusIterator iterator = new SamLocusIterator(in, intervalList);

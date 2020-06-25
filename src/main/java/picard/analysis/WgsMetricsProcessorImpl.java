@@ -104,6 +104,8 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
     private static long previousCallTime = System.currentTimeMillis();
     private static long firstCallTime = System.currentTimeMillis();
 
+    private ExecutorService service;;
+
 
 
     private final Log log = Log.getInstance(WgsMetricsProcessorImpl.class);
@@ -127,7 +129,8 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
             ProgressLogger progress,
             boolean DISTRIBUTED_COMPUTING,
             boolean IS_SERVER,
-            IntervalList intervalList) {
+            IntervalList intervalList,
+            ExecutorService service) {
         this.iterator = iterator;
         this.collector = collector;
         this.refWalker = refWalker;
@@ -135,6 +138,7 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
         this.DISTRIBUTED_COMPUTING = DISTRIBUTED_COMPUTING;
         this.IS_SERVER = IS_SERVER;
         this.intervalList = intervalList;
+        this.service = service;
     }
 
     /**
@@ -142,128 +146,14 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
      */
     @Override
     public void processFile() {
-        final AtomicLong counter = new AtomicLong();
-        final List<SamLocusIterator.LocusInfo> records = new ArrayList<>(READS_IN_PACK);
-     //   ExecutorService service = Executors.newFixedThreadPool(16);
+        long counter = 0;
+        List<SamLocusIterator.LocusInfo> records = new ArrayList<>(READS_IN_PACK);
+
 
         com.sun.management.OperatingSystemMXBean osBean = ManagementFactory.getPlatformMXBean(OperatingSystemMXBean.class);
         long pack_counter = 0;
 
-        // if the program working in mode of DISTRIBUTED_COMPUTING
-        if(DISTRIBUTED_COMPUTING==true) {
-            log.info("DISTRIBUTED_COMPUTING");
-            String args[] = {"", ""};
 
-            // if the program working in server mode
-            if(IS_SERVER == false) {
-                String[] address = Arrays.asList("127.0.0.1", "4322").toArray(new String[0]);
-
-                if (address.length != 2) {
-                    System.err.println(
-                            "Usage: java EchoClient <host name> <port number>");
-                }
-
-                String hostName = address[0];
-                int portNumber = Integer.parseInt(address[1]);
-
-                try (Socket echoSocket = new Socket(hostName, portNumber);
-                     ObjectOutputStream out =
-                             new ObjectOutputStream(echoSocket.getOutputStream());
-                     BufferedReader in =
-                             new BufferedReader(
-                                     new InputStreamReader(echoSocket.getInputStream()));
-                     BufferedReader stdIn =
-                             new BufferedReader(
-                                     new InputStreamReader(System.in))
-                ) {
-                    String userInput;
-                    while ((userInput = stdIn.readLine()) != null) {
-
-                        out.writeObject((Object) new Integer(0));
-                        out.flush();
-                        String receivedWord = in.readLine();
-                        System.out.println("echo: " + receivedWord);
-                        if (receivedWord.equals("close"))
-                            break;
-                    }
-                    System.out.println("The communication finished");
-                } catch (UnknownHostException e) {
-                    System.err.println("Don't know about host " + hostName);
-                    System.exit(1);
-                } catch (IOException e) {
-                    e.printStackTrace();
-                    System.err.println("Couldn't get I/O for the connection to " +
-                            hostName);
-                    System.exit(1);
-                }
-
-            } else {
-
-
-                args = Arrays.asList("4322").toArray(new String[0]);
-                if (args.length != 1) {
-                    System.err.println("Usage: java EchoServer <port number>");
-                }
-
-                int portNumber = Integer.parseInt(args[0]);
-                try {
-                    ServerSocket serverSocket = new ServerSocket(Integer.parseInt(args[0]));
-                    ExecutorService executorService = Executors.newCachedThreadPool();
-                    // for (int i = 0; i < 3; i++) {
-
-                    executorService.submit(() -> {
-                        try (
-                                Socket clientSocket = serverSocket.accept();
-                                PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
-                                ObjectInputStream in = new ObjectInputStream(new BufferedInputStream(clientSocket.getInputStream()))
-                        ) {
-                            String inputLine = "none";
-
-                            Object objectInput = null;
-                            //System.out.println(in.read());
-
-                            while ((objectInput = in.readObject()) != null) {
-
-                                if (objectInput instanceof String) {
-                                    System.out.println("Is String");
-                                    inputLine = (String) objectInput;
-                                } else {
-                                    System.out.println("Not String");
-                                }
-
-                                if (inputLine.equals("close"))
-                                    break;
-
-                                out.println("***toFormAnswer for "+inputLine);
-                            }
-                            //out.println("Closing connection with server");
-                        } catch (IOException e) {
-                            System.out.println("Exception caught when trying to listen on port " + portNumber + " or listening for a connection");
-                            System.out.println(e.getMessage());
-                        } catch (ClassNotFoundException ec) {
-                            System.out.println("ClassNotFoundException");
-                            System.out.println(ec.getMessage());
-                        }
-                    });
-                    //}
-                    executorService.awaitTermination(5, TimeUnit.MINUTES);
-                    serverSocket.close();
-
-
-                } catch (IOException | InterruptedException e) {
-                    System.out.println("Exception caught when trying create new Cached Thread Pool or await termination");
-                    System.out.println(e.getMessage());
-                }
-            }
-
-
-        // if the program working in NOT mode of DISTRIBUTED_COMPUTING
-        } else {
-
-
-            System.out.println("intervalList.toString() : "+intervalList.toString());
-            List<Interval> intervalCollectionList = intervalList.getIntervals();
-            int c = 0;
            /* for(Interval i : intervalCollectionList) {
                 System.out.println("( " + (++c) + " )");
                 System.out.println("i.toString() : " + i.toString());
@@ -272,201 +162,56 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
                 System.out.println("i.getContig() : " + i.getContig());
                 System.out.println("i.countBases(intervalCollectionList) : " + i.countBases(intervalCollectionList));
 */
-
-
-
-
             while (iterator.hasNext()) {
-                //synchronized (collector) {
-                    final AbstractLocusInfo<T> info = iterator.next();
-                    final ReferenceSequence ref = refWalker.get(info.getSequenceIndex());
+                AbstractLocusInfo info = iterator.next();
+                ReferenceSequence ref = refWalker.get(info.getSequenceIndex());
 
+                /* Multithreading */
+                // Check that the reference is not N
+                final byte base = ref.getBases()[info.getPosition() - 1];
+                if (SequenceUtil.isNoCall(base))
+                    continue;
 
-                    final boolean referenceBaseN = collector.isReferenceBaseN(info.getPosition(), ref);
+                records.add((SamLocusIterator.LocusInfo)info);
 
-                    collector.addInfo(info, ref, referenceBaseN);
+                // Record progress
+                progress.record(info.getSequenceName(), info.getPosition());
+                if (records.size() < READS_IN_PACK && iterator.hasNext())
+                {
+                    continue;
+                }
 
-                    if (referenceBaseN) {
-                        continue;
-                    }
+                final List<SamLocusIterator.LocusInfo> tmpRecords = records;
+                records = new ArrayList<>(READS_IN_PACK);
 
-                    progress.record(info.getSequenceName(), info.getPosition());
-              //  }
-
-                    if (collector.isTimeToStop(counter.incrementAndGet())) {
-                        break;
-                    }
-                    collector.setCounter(counter.get());
-
-            }
-
-
-
-
-               /* while (iterator.hasNext()) {
-
-
-                    AbstractLocusInfo info = iterator.next();
-                    pack_counter++;
-                    //  long placeToStart = 10 * 100 * 1000 * 1000L + 1;
-                    //   if (pack_counter >= placeToStart) {
-                    // System.out.println(pack_counter +" >= "+ placeToStart+" : "+(pack_counter >= placeToStart));
-
-                    ReferenceSequence ref = refWalker.get(info.getSequenceIndex());
-
-
-                    /* Multithreading */
-                    // Check that the reference is not N
-
-
-                /*
-
-
-
-
-                    final byte base = ref.getBases()[info.getPosition() - 1];
-
-                    if ((SequenceUtil.isNoCall(base)))
-                        continue;
-
-                    records.add((SamLocusIterator.LocusInfo) info);
-
-                    // Record progress
-                    progress.record(info.getSequenceName(), info.getPosition());
-                    if ((records.size() < READS_IN_PACK && iterator.hasNext()))
-                        continue;
-
-                    final List<SamLocusIterator.LocusInfo> tmpRecords = records;
-                    records = new ArrayList<>(READS_IN_PACK);
-
-
-                    // Add read pack to the collector in a separate stream
-                  /*  service.submit(new Runnable() {
-                        @Override
-                        public void run() {*/
-
-
-                   /*
-
-
-
-                            for (SamLocusIterator.LocusInfo rec : tmpRecords) {
-
-                                boolean referenceBaseN = collector.isReferenceBaseN(info.getPosition(), ref);
-                                collector.addInfo((AbstractLocusInfo) rec, ref, referenceBaseN);
-                                if (referenceBaseN) {
-                                    continue;
-                                }
-                                //  progress.record(info.getSequenceName(), info.getPosition());
+                // Add read pack to the collector in a separate stream
+                service.submit(new Runnable() {
+                    @Override
+                    public void run() {
+                        for (SamLocusIterator.LocusInfo rec : tmpRecords) {
+                            boolean referenceBaseN = collector.isReferenceBaseN(info.getPosition(), ref);
+                            collector.addInfo((AbstractLocusInfo) rec, ref, referenceBaseN);
+                            if (referenceBaseN) {
+                                continue;
                             }
-                        /*}
-                    });*/
-
-                    // Perhaps stop
-                    // if (usingStopAfter && counter > stopAfter) break;
-
-
-                    // Record progress
-
-            /*
-
-
-                    if (collector.isTimeToStop(counter.incrementAndGet())) {
-                        break;
+                        }
                     }
-                    collector.setCounter(counter.get());
-                    //  }
+                });
+                // Perhaps stop
+                if (collector.isTimeToStop(++counter)) {
+                    break;
+                }
 
+                collector.setCounter(counter);
 
-
-               /* if ((System.currentTimeMillis() - previousCallTime) > GC_ATTEMPT_OF_CALL_FREQUENCY) {
-                     System.gc();
-                     log.info("Attempt to call the garbage collector");
-                     GC_CALLED_TIMES++;
-                     previousCallTime = System.currentTimeMillis();
-                }*/
-
-
-               /*     if ((System.currentTimeMillis() - previousCallTime) > 30 * 1000) {
-                        //service2 = (ThreadPoolExecutor)service;
-                        double diff = (((double) System.currentTimeMillis() - (double) firstCallTime) / 60000);
-                        previousCallTime = System.currentTimeMillis();
-                        System.out.println("Elapsed time in WgsProcessor: " + diff + " min");
-                        System.out.println("info.getStart(): " + info.getStart());
-                        System.out.println("pack_counter: " + pack_counter);
-*/
-
-
-                   /* log.info("service2.getQueue().size() "+service2.getQueue().size());
-                    log.info("service2.getActiveCount() "+service2.	getActiveCount());
-                    log.info("service2.getCompletedTaskCount() "+service2.getCompletedTaskCount());
-                   // log.info("service2.getKeepAliveTime(NANOSECONDS) "+service2.getKeepAliveTime(TimeUnit.NANOSECONDS));
-
-                 //   System.out.println("ProcessCpuLoad: "+osBean.getProcessCpuLoad() * 100);
-                //    System.out.println("SystemCpuLoad: "+osBean.getSystemCpuLoad()  * 100);
-*/
-                 //   }
-
-             //   }
-
-
-          /*  }*/
-         //   service.shutdown();
-
-
-
-
-
-
-
-
-          /*  try {
-                service.awaitTermination(1, TimeUnit.DAYS);
-            } catch (InterruptedException ex) {
-                Logger.getLogger(SinglePassSamProgram.class.getName()).log(Level.SEVERE,
-                        null, ex);
+                if((System.currentTimeMillis()-previousCallTime)>GC_ATTEMPT_OF_CALL_FREQUENCY){
+                    System.gc();
+                    log.info("Attempt to call the garbage collector");
+                    GC_CALLED_TIMES++;
+                    previousCallTime = System.currentTimeMillis();
+                }
+                //log.info(service.getQueue().size());
             }
-*/
-
-        }
-
-/*
-
-
-
-        long unfilteredBaseQHistogramSum = 0;
-        long unfilteredDepthHistogramSum = 0;
-        for (int i = 0; i < collector.unfilteredBaseQHistogramArray.length(); ++i) {
-            unfilteredBaseQHistogramSum += collector.unfilteredBaseQHistogramArray.get(i);
-        }
-        for (int i = 0; i <= collector.coverageCap; ++i) {
-            unfilteredDepthHistogramSum += i*collector.unfilteredDepthHistogramArray.get(i);
-        }
-        if (unfilteredBaseQHistogramSum != unfilteredDepthHistogramSum) {
-            throw new PicardException("updated coverage and baseQ distributions unequally");
-        }
-
-
-        // check that we added the same number of bases to the raw coverage histogram and the base quality histograms
-        AtomicLongArray unfilteredBaseQHistogramArray = collector.unfilteredBaseQHistogramArray;
-        long sum = 0;
-        for(int i=0; i<unfilteredBaseQHistogramArray.length(); i++)
-            sum += unfilteredBaseQHistogramArray.get(i);
-        final long sumBaseQ = sum;
-
-        AtomicLongArray unfilteredDepthHistogramArray = collector.unfilteredDepthHistogramArray;
-        long[] unfilteredDepthHistogramNotAtomicArray = new long[unfilteredDepthHistogramArray.length()];
-        for(int i=0; i<unfilteredDepthHistogramArray.length(); i++)
-            unfilteredDepthHistogramNotAtomicArray[i] = unfilteredDepthHistogramArray.get(i);
-
-        final long sumDepthHisto = LongStream.rangeClosed(0, collector.coverageCap).map(i -> (i * unfilteredDepthHistogramNotAtomicArray[(int)i])).sum();
-        if (sumBaseQ != sumDepthHisto) {
-            log.error("Coverage and baseQ distributions contain different amount of bases!");
-        }
-
-        */
-
-
 
 
     }
