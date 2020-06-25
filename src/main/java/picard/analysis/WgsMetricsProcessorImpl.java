@@ -36,6 +36,12 @@ import picard.filter.CountingFilter;
 import picard.filter.CountingPairedFilter;
 import shaded.cloud_nio.com.google.api.client.util.DateTime;
 
+import javax.xml.bind.JAXBContext;
+import javax.xml.bind.JAXBException;
+import javax.xml.bind.Marshaller;
+import javax.xml.bind.Unmarshaller;
+import javax.xml.stream.*;
+import javax.xml.stream.util.StreamReaderDelegate;
 import java.io.*;
 import java.lang.management.ManagementFactory;
 import java.net.ServerSocket;
@@ -84,36 +90,15 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
   /*  Needed for multithreading. Amount of reads in the pack.")  */
     public static final int READS_IN_PACK = 1000;  // Multithreading
 
-    /*
-     program attempts call garbage collector one time per:
-     */
-    private static final long GC_ATTEMPT_OF_CALL_FREQUENCY = 5*60*1000; // in milliseconds
-
-
-    /*
-     garbage collector was already called GC_CALLED_TIMES times
-    */
-    private static int GC_CALLED_TIMES = 0;
-
-
-
 
     /*
     temporal variable for calling garbage collector
     */
-    private static long previousCallTime = System.currentTimeMillis();
-    private static long firstCallTime = System.currentTimeMillis();
 
     private ExecutorService service;;
 
-
-
     private final Log log = Log.getInstance(WgsMetricsProcessorImpl.class);
 
-
-    boolean DISTRIBUTED_COMPUTING;
-
-    boolean IS_SERVER;
 
     IntervalList intervalList;
 
@@ -127,16 +112,12 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
             ReferenceSequenceFileWalker refWalker,
             AbstractWgsMetricsCollector<T> collector,
             ProgressLogger progress,
-            boolean DISTRIBUTED_COMPUTING,
-            boolean IS_SERVER,
             IntervalList intervalList,
             ExecutorService service) {
         this.iterator = iterator;
         this.collector = collector;
         this.refWalker = refWalker;
         this.progress = progress;
-        this.DISTRIBUTED_COMPUTING = DISTRIBUTED_COMPUTING;
-        this.IS_SERVER = IS_SERVER;
         this.intervalList = intervalList;
         this.service = service;
     }
@@ -149,19 +130,6 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
         long counter = 0;
         List<SamLocusIterator.LocusInfo> records = new ArrayList<>(READS_IN_PACK);
 
-
-        com.sun.management.OperatingSystemMXBean osBean = ManagementFactory.getPlatformMXBean(OperatingSystemMXBean.class);
-        long pack_counter = 0;
-
-
-           /* for(Interval i : intervalCollectionList) {
-                System.out.println("( " + (++c) + " )");
-                System.out.println("i.toString() : " + i.toString());
-                System.out.println("i.getStart() : " + i.getStart());
-                System.out.println("i.length() : " + i.length());
-                System.out.println("i.getContig() : " + i.getContig());
-                System.out.println("i.countBases(intervalCollectionList) : " + i.countBases(intervalCollectionList));
-*/
             while (iterator.hasNext()) {
                 AbstractLocusInfo info = iterator.next();
                 ReferenceSequence ref = refWalker.get(info.getSequenceIndex());
@@ -201,16 +169,6 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
                 if (collector.isTimeToStop(++counter)) {
                     break;
                 }
-
-                collector.setCounter(counter);
-
-                if((System.currentTimeMillis()-previousCallTime)>GC_ATTEMPT_OF_CALL_FREQUENCY){
-                    System.gc();
-                    log.info("Attempt to call the garbage collector");
-                    GC_CALLED_TIMES++;
-                    previousCallTime = System.currentTimeMillis();
-                }
-                //log.info(service.getQueue().size());
             }
 
 
@@ -225,4 +183,5 @@ public class WgsMetricsProcessorImpl<T extends AbstractRecordAndOffset> implemen
             CountingPairedFilter pairFilter) {
         collector.addToMetricsFile(file, includeBQHistogram, dupeFilter, adapterFilter, mapqFilter, pairFilter);
     }
+
 }

@@ -59,6 +59,11 @@ import picard.filter.CountingFilter;
 import picard.filter.CountingMapQFilter;
 import picard.filter.CountingPairedFilter;
 
+import javax.xml.bind.JAXBContext;
+import javax.xml.bind.JAXBException;
+import javax.xml.bind.Marshaller;
+import javax.xml.bind.Unmarshaller;
+import javax.xml.stream.*;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -70,6 +75,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -158,6 +164,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
     public int READ_LENGTH = 150;
 
 
+
     /*
     DISTRIBUTED COMPUTING
     */
@@ -168,12 +175,24 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
     @Argument(doc = "A role of computer in distributed computing: default - false.")
     public boolean IS_CLIENT;
 
-    public boolean DISTRIBUTED_COMPUTING = false;
+    @Argument(doc = "Address, where client will be looking for a server.")
+    public String ADDRESS_FOR_CLIENT = "127.0.0.1";
 
-    @Argument(doc = "Amount of locus, that should calculate on remote computer")
-    public final long CALCULATE_ON_SERVER = 1000000000L;
+    @Argument(doc = "Port, where client will be looking for a server.")
+    public String PORT_FOR_CLIENT = "4322";
 
-    public long have_sent_to_server = 0;
+
+    @Argument(doc = "Port, where server will be waiting for a client.")
+    public String PORT_FOR_SERVER = "4322";
+
+    private boolean DISTRIBUTED_COMPUTING = false;
+
+    @Argument(doc = "Amount of locus, not lees, that should be calculate on remote computer")
+    private static final long CALCULATE_ON_SERVER = 1500000000L;
+
+    private long have_sent_to_server = 0;
+
+    private static final long INTERVAL_LIST_LENGTH = 250000000L;
 
 
 
@@ -222,6 +241,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
     @Override
     protected int doWork() {
+
         DISTRIBUTED_COMPUTING = IS_SERVER||IS_CLIENT;
         IOUtil.assertFileIsReadable(INPUT);
         IOUtil.assertFileIsWritable(OUTPUT);
@@ -262,7 +282,6 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
         final ExecutorService service = Executors.newCachedThreadPool();
 
         final AbstractWgsMetricsCollector<?> collector = getCollector(COVERAGE_CAP, getIntervalsToExamine());
-        AbstractWgsMetricsCollector<?> serverCollector = null;
 
 
         final AbstractLocusIterator iteratorFirst = getLocusIterator(inFirst);
@@ -275,58 +294,57 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
         int newIntervalListLength = 0;
         List<Interval> intervalCollectionList = getIntervalsToExamine().getIntervals();
-
+        ArrayList serverCollectorsDataList = null;
 
 
         // if the program working in mode of DISTRIBUTED_COMPUTING
         if(DISTRIBUTED_COMPUTING==true) {
             log.info("DISTRIBUTED_COMPUTING");
-            String args[] = {"", ""};
 
             // if the program working in cliet's mode
             if(IS_CLIENT == true) {
-                log.info("CLIENTS'S MODE");
-                String[] address = Arrays.asList("127.0.0.1", "4322").toArray(new String[0]);
+                log.info("CLIENT'S MODE");
 
-                if (address.length != 2)
-                    System.err.println(
-                            "Usage: java EchoClient <host name> <port number>");
+                String hostName = ADDRESS_FOR_CLIENT;
+                int portNumber = Integer.parseInt(PORT_FOR_CLIENT);
 
                 System.out.println("Flag 01");
-                String hostName = address[0];
-                int portNumber = Integer.parseInt(address[1]);
 
-                System.out.println("Flag 02");
-                try (Socket echoSocket = new Socket(hostName, portNumber);
+                try (Socket echoSocket =
+                             new Socket(hostName, portNumber);
                      ObjectOutputStream out =
                              new ObjectOutputStream(
                                     new BufferedOutputStream(
                                         echoSocket.getOutputStream()));
-                     ObjectInputStream in =
+                     ObjectInputStream ois =
                              new ObjectInputStream(
                                      new BufferedInputStream(
                                         echoSocket.getInputStream())
                              );
-                     BufferedReader stdIn =
+                     /*BufferedReader stdIn =
                              new BufferedReader(
-                                     new InputStreamReader(System.in))
+                                     new InputStreamReader(System.in))*/
                 ) {
-                    System.out.println("Flag 03");
+                    System.out.println("Flag 02");
+                    ArrayList<Integer> newIntervalListNumbers = new ArrayList<Integer>();
 
-                    for (Interval i : intervalCollectionList) {
+                    /*for (int j=0; j<intervalCollectionList.size(); j++) {
+                        Interval i = intervalCollectionList.get(j);
                         final ReferenceSequenceFileWalker refWalker = new ReferenceSequenceFileWalker(REFERENCE_SEQUENCE);
                         final SamReader inSamReader = getSamReader();
 
                         newIntervalList.add(i);
+                        newIntervalListNumbers.add(new Integer(j));
                         newIntervalListLength += i.length();
-                        if ((newIntervalListLength >= 250000000L) || (i.equals(intervalCollectionList.get(intervalCollectionList.size() - 1)))) {
+                        if ((newIntervalListLength >= INTERVAL_LIST_LENGTH) || (i.equals(intervalCollectionList.get(intervalCollectionList.size() - 1)))) {
                             final IntervalList tempIntervalList = newIntervalList;
                             newIntervalList = intervalList_01.subtract(intervalList_01, intervalList_02);
 
                             if (have_sent_to_server <= CALCULATE_ON_SERVER) {
                                 have_sent_to_server += newIntervalListLength;
-                                out.writeObject(tempIntervalList);
+                                out.writeObject(newIntervalListNumbers);
                                 out.flush();
+                                newIntervalListNumbers = new ArrayList<>();
                             } else {
                                 final AbstractLocusIterator iterator = getLocusIteratorFromInterval(inSamReader, tempIntervalList);
 
@@ -336,23 +354,27 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
                                 List<Interval> intervalsCollectionList = tempIntervalList.getIntervals();
                                 for (Interval inter : intervalsCollectionList)
-                                    System.out.println("inter.toString() : " + inter.toString());
+                                    log.info("Started computing : " + inter.toString());
 
                                 final WgsMetricsProcessor processor = getWgsMetricsProcessor(progress, refWalker, iterator, collector, service);
                                 processor.processFile();
                             }
                             newIntervalListLength = 0;
                         }
-                    }
+                    }*/
+
                     String userInput;
-                    while ((userInput = stdIn.readLine()) != null) {
-                        out.writeObject(new String("waiting_for_you"));
+                    while (true) {
+                        out.writeObject(new String("waiting_for_your_data"));
                         out.flush();
                         System.out.println("Waiting for answer from server");
 
-                        Object receivedObject = (Object) in.readObject();
-                        if(receivedObject instanceof AbstractWgsMetricsCollector)
-                            serverCollector = (AbstractWgsMetricsCollector)in.readObject();
+                        //Object receivedObject = getFromInputStreamReader(in);
+                        Object receivedObject = ois.readObject();
+                        if(receivedObject instanceof ArrayList) {
+                            serverCollectorsDataList = (ArrayList)receivedObject;
+                            break;
+                        }
 
                         try {
                             Thread.sleep(10 * 1000);
@@ -360,8 +382,9 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
                         }
                     }
                     System.out.println("The communication finished");
-                } catch (ClassNotFoundException cnfe){
-                    System.err.println("Server response not recognized " + cnfe.getMessage());
+                } catch (ClassNotFoundException cnfe) {
+                    System.err.println("ClassNotFoundException with ArrayList from server" + hostName);
+                    System.exit(1);
                 } catch (UnknownHostException e) {
                     System.err.println("Don't know about host " + hostName);
                     System.exit(1);
@@ -376,44 +399,39 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
             } else {
                 log.info("SERVER'S MODE");
-                args = Arrays.asList("4322").toArray(new String[0]);
-                if (args.length != 1)
-                    System.err.println("Usage: java EchoServer <port number>");
 
-                System.out.println("Flag 01");
-
-
-                int portNumber = Integer.parseInt(args[0]);
+                int portNumber = Integer.parseInt(PORT_FOR_SERVER);
                 try {
-                    ServerSocket serverSocket = new ServerSocket(Integer.parseInt(args[0]));
 
-                    System.out.println("Flag 02");
-                    try (
-                            Socket clientSocket = serverSocket.accept();
-                            ObjectOutputStream out = new ObjectOutputStream(
-                                        clientSocket.getOutputStream());
-                            ObjectInputStream in = new ObjectInputStream(
-                                        clientSocket.getInputStream())
+                    ServerSocket serverSocket = new ServerSocket(Integer.parseInt(PORT_FOR_SERVER));
+
+                    System.out.println("Flag 01");
+                    try (Socket clientSocket = serverSocket.accept();
+                            ObjectInputStream in =
+                                    new ObjectInputStream(
+                                            new BufferedInputStream(
+                                                    clientSocket.getInputStream()));
+                            ObjectOutputStream osw =
+                                    new ObjectOutputStream(
+                                        new BufferedOutputStream(
+                                            clientSocket.getOutputStream()));
+
                     ) {
-                        System.out.println("Flag 03");
                         String inputLine = "none";
-
                         Object objectInput = null;
-                        //System.out.println(in.read());
-                        IntervalList tempIntervalList = null;
+
+                        System.out.println("Flag 02");
 
                         while ((objectInput = in.readObject()) != null) {
+                                if (objectInput instanceof ArrayList) {
+                                    log.info("List of intervals was received");
+                                    ArrayList<Integer> newIntervalListNumbers = (ArrayList<Integer>) objectInput;
+                                    for (Integer intervalNumber : newIntervalListNumbers)
+                                        newIntervalList.add(intervalCollectionList.get(intervalNumber));
 
-                            if (objectInput instanceof String) {
-                                System.out.println("Is String");
-                                inputLine = (String) objectInput;
-                                if (inputLine.equals("waiting_for_you"))
-                                    break;
-                            } else {
-                                System.out.println("Not String");
-                                if (objectInput instanceof IntervalList) {
-                                    System.out.println("Is IntervalList");
-                                    tempIntervalList = (IntervalList) objectInput;
+
+                                    final IntervalList tempIntervalList = newIntervalList;
+                                    newIntervalList = intervalList_01.subtract(intervalList_01, intervalList_02);
 
                                     final ReferenceSequenceFileWalker refWalker = new ReferenceSequenceFileWalker(REFERENCE_SEQUENCE);
                                     final SamReader inSamReader = getSamReader();
@@ -426,16 +444,23 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
                                     List<Interval> intervalsCollectionList = tempIntervalList.getIntervals();
                                     for (Interval inter : intervalsCollectionList)
-                                        System.out.println("inter.toString() : " + inter.toString());
+                                        log.info("Started computing : " + inter.toString());
 
                                     final WgsMetricsProcessor processor = getWgsMetricsProcessor(progress, refWalker, iterator, collector, service);
                                     processor.processFile();
-                                }
-                                System.out.println("Unknown input file's format");
-                            }
 
-                            out.writeObject(collector);
-                            out.flush();
+
+                                } else if (objectInput instanceof String) {
+
+                                inputLine = (String) objectInput;
+                                if (inputLine.equals("waiting_for_your_data")) {
+                                    System.out.println("out.writeObject(collector)");
+
+                                    osw.writeObject(collector.getDataSet());
+                                    osw.flush();
+                                    break;
+                                }
+                            }
                         }
 
 
@@ -465,7 +490,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
                 newIntervalList.add(i);
                 newIntervalListLength += i.length();
-                if ((newIntervalListLength >= 250000000L) || (i.equals(intervalCollectionList.get(intervalCollectionList.size() - 1)))) {
+                if ((newIntervalListLength >= INTERVAL_LIST_LENGTH) || (i.equals(intervalCollectionList.get(intervalCollectionList.size() - 1)))) {
                     final IntervalList tempIntervalList = newIntervalList;
                     newIntervalList = intervalList_01.subtract(intervalList_01, intervalList_02);
                     newIntervalListLength = 0;
@@ -478,7 +503,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
                     List<Interval> intervalsCollectionList = tempIntervalList.getIntervals();
                     for (Interval inter : intervalsCollectionList)
-                        System.out.println("inter.toString() : " + inter.toString());
+                        log.info("Started computing : " + inter.toString());
 
                     final WgsMetricsProcessor processor = getWgsMetricsProcessor(progress, refWalker, iterator, collector, service);
                     processor.processFile();
@@ -487,8 +512,22 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
         }
 
-        if (serverCollector != null)
-            collector.combineDataWith(serverCollector);
+
+
+        service.shutdown();
+
+
+        try {
+            service.awaitTermination(1, TimeUnit.DAYS);
+        } catch (InterruptedException ex) {
+            Logger.getLogger(SinglePassSamProgram.class.getName()).log(Level.SEVERE,
+                    null, ex);
+        }
+
+
+
+        if (serverCollectorsDataList != null)
+            collector.combineDataWith(serverCollectorsDataList);
 
 
         long unfilteredBaseQHistogramSum = 0;
@@ -520,16 +559,6 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
 
 
-        service.shutdown();
-
-
-        try {
-            service.awaitTermination(1, TimeUnit.DAYS);
-        } catch (InterruptedException ex) {
-            Logger.getLogger(SinglePassSamProgram.class.getName()).log(Level.SEVERE,
-                    null, ex);
-        }
-
             final MetricsFile<WgsMetrics, Integer> out = getMetricsFile();
 
             processorFirst.addToMetricsFile(out, INCLUDE_BQ_HISTOGRAM, dupeFilter, adapterFilter, mapqFilter, pairFilter);
@@ -557,7 +586,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
     private synchronized <T extends AbstractRecordAndOffset> WgsMetricsProcessorImpl<T> getWgsMetricsProcessor(
             ProgressLogger progress, ReferenceSequenceFileWalker refWalker,
             AbstractLocusIterator<T, AbstractLocusInfo<T>> iterator, AbstractWgsMetricsCollector<T> collector, ExecutorService service) {
-        return new WgsMetricsProcessorImpl<T>(iterator, refWalker, collector, progress, DISTRIBUTED_COMPUTING, IS_SERVER, getIntervalsToExamine(), service);
+        return new WgsMetricsProcessorImpl<T>(iterator, refWalker, collector, progress, getIntervalsToExamine(), service);
     }
 
     /** Gets the intervals over which we will calculate metrics. */
@@ -690,12 +719,6 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
             return (INTERVALS != null) ? new EdgeReadIterator(in, IntervalList.fromFile(INTERVALS)) : new EdgeReadIterator(in);
         }
 
-      /*  List<Interval> list= intervalList.getIntervals();
-
-       for (Interval i : list)
-           System.out.println("1)   i.toString() : "+i.toString());*/
-
-
         SamLocusIterator iterator = new SamLocusIterator(in, intervalList);
         iterator.setMaxReadsToAccumulatePerLocus(LOCUS_ACCUMULATION_CAP);
         iterator.setEmitUncoveredLoci(true);
@@ -716,7 +739,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
                 new WgsMetricsCollector(this, coverageCap, intervals);
     }
 
-    protected static class WgsMetricsCollector extends AbstractWgsMetricsCollector<SamLocusIterator.RecordAndOffset> {
+    protected static class WgsMetricsCollector extends AbstractWgsMetricsCollector<SamLocusIterator.RecordAndOffset> implements Serializable {
 
         public WgsMetricsCollector(final CollectWgsMetrics metrics, final int coverageCap, final IntervalList intervals) {
             super(metrics, coverageCap, intervals);
@@ -764,4 +787,52 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
             unfilteredDepthHistogramArray.getAndIncrement(unfilteredDepth);
         }
     }
+
+
+
+
+
+/*
+
+    // сохраняем объект в XML файл
+    public static void sendToOutputStream(Object object, OutputStreamWriter osw) {
+        try {
+            JAXBContext context = JAXBContext.newInstance(AbstractWgsMetricsCollector.class);
+            Marshaller marshaller = context.createMarshaller();
+
+            // устанавливаем флаг для читабельного вывода XML в JAXB
+            marshaller.setProperty(Marshaller.JAXB_FORMATTED_OUTPUT, Boolean.TRUE);
+
+
+            // маршаллинг объекта в файл
+            marshaller.marshal(object, new File("/home/alexey/IdeaProjects/picard/src/main/java/picard/analysis/AbstractWgsMetricsCollector.txt"));
+
+            XMLOutputFactory xmlOutputFactory = XMLOutputFactory.newInstance();
+            XMLStreamWriter xmlStreamWriter = xmlOutputFactory.createXMLStreamWriter(osw);
+
+            // маршаллинг объекта в Stream
+            marshaller.marshal(object, xmlStreamWriter);
+
+        } catch (JAXBException | XMLStreamException e) {
+            e.printStackTrace();
+        }
+    }
+
+
+    // восстанавливаем объект из InputStreamReader
+    public static Object getFromInputStreamReader(InputStreamReader isr) {
+        try {
+            // создаем объект JAXBContext - точку входа для JAXB
+            JAXBContext jaxbContext = JAXBContext.newInstance(AbstractWgsMetricsCollector.class);
+            Unmarshaller un = jaxbContext.createUnmarshaller();
+
+            XMLInputFactory xmlInputFactory = XMLInputFactory.newInstance();
+            XMLStreamReader xmlStreamReader = xmlInputFactory.createXMLStreamReader(isr);
+
+            return un.unmarshal(xmlStreamReader);
+        } catch (JAXBException | XMLStreamException e){
+            e.printStackTrace();
+        }
+        return null;
+    }*/
 }

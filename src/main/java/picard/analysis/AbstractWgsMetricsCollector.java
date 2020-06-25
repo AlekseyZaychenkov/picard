@@ -35,6 +35,10 @@ import org.apache.commons.lang.ArrayUtils;
 import picard.filter.CountingFilter;
 import picard.filter.CountingPairedFilter;
 
+import javax.xml.bind.annotation.XmlElementWrapper;
+import javax.xml.bind.annotation.XmlRootElement;
+import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
@@ -49,15 +53,18 @@ import java.util.concurrent.atomic.AtomicLongArray;
  * @author Mariia_Zueva@epam.com, EPAM Systems, Inc. <www.epam.com>
  */
 
-public abstract class AbstractWgsMetricsCollector<T extends AbstractRecordAndOffset> {
+@XmlRootElement()
+public abstract class AbstractWgsMetricsCollector<T extends AbstractRecordAndOffset> implements Serializable {
 
     /**
      * The source CollectWgsMetrics object
      */
-    final CollectWgsMetrics collectWgsMetrics;
+    final transient CollectWgsMetrics collectWgsMetrics;
     /** Count of sites with a given depth of coverage. Includes all but quality 2 bases.
      * We draw depths from this histogram when we calculate the theoretical het sensitivity.
      */
+
+    @XmlElementWrapper
     protected final AtomicLongArray unfilteredDepthHistogramArray;
     /** Count of bases observed with a given base quality. Includes all but quality 2 bases.
      * We draw bases from this histogram when we calculate the theoretical het sensitivity.
@@ -85,15 +92,32 @@ public abstract class AbstractWgsMetricsCollector<T extends AbstractRecordAndOff
      */
     protected final int coverageCap;
 
-    protected final IntervalList intervals;
-    /**
+    protected transient IntervalList intervals;
+    /*
      * This value indicates that processing will stop after specified int the metric amount of genomic bases.
      */
-    private final boolean usingStopAfter;
+    private boolean usingStopAfter;
     /**
      * The number of processed genomic bases
      */
     protected long counter = 0;
+
+
+
+    public ArrayList getDataSet(){
+        ArrayList datalist = new ArrayList();
+        datalist.add(this.unfilteredDepthHistogramArray);
+        datalist.add(this.unfilteredBaseQHistogramArray);
+        datalist.add(this.highQualityDepthHistogramArray);
+        datalist.add(this.basesExcludedByBaseq);
+        datalist.add(this.basesExcludedByOverlap);
+        datalist.add(this.basesExcludedByCapping);
+        datalist.add(this.coverageCap);
+        datalist.add(this.usingStopAfter);
+        datalist.add(this.counter);
+
+        return datalist;
+    }
 
     /**
      * Creates a collector and initializes the inner data structures
@@ -101,6 +125,13 @@ public abstract class AbstractWgsMetricsCollector<T extends AbstractRecordAndOff
      * @param collectWgsMetrics CollectWgsMetrics, that creates this collector
      * @param coverageCap       coverage cap
      */
+
+    
+
+
+
+
+
     AbstractWgsMetricsCollector(CollectWgsMetrics collectWgsMetrics, final int coverageCap, final IntervalList intervals) {
         if (coverageCap <= 0) {
             throw new IllegalArgumentException("Coverage cap must be positive.");
@@ -217,43 +248,65 @@ public abstract class AbstractWgsMetricsCollector<T extends AbstractRecordAndOff
     }
 
 
-    public AbstractWgsMetricsCollector combineDataWith(AbstractWgsMetricsCollector otherCollector){
+    public AbstractWgsMetricsCollector combineDataWith(ArrayList datalist){
+        AbstractWgsMetricsCollector combinedCollector
+                = new CollectWgsMetrics.WgsMetricsCollector(this.collectWgsMetrics, this.coverageCap, this.intervals);
 
-        AbstractWgsMetricsCollector combinedCollector  = new CollectWgsMetrics.WgsMetricsCollector(this.collectWgsMetrics, this.coverageCap, this.intervals);
+        try {
+            AtomicLongArray otherUnfilteredDepthHistogramArray
+                    = (AtomicLongArray) datalist.get(0);
+            AtomicLongArray otherUnfilteredBaseQHistogramArray
+                    = (AtomicLongArray) datalist.get(1);
+            AtomicLongArray otherHighQualityDepthHistogramArray
+                    = (AtomicLongArray) datalist.get(2);
 
-        for(int i=0; i<combinedCollector.unfilteredDepthHistogramArray.length(); i++){
-            long a = this.unfilteredDepthHistogramArray.get(i);
-            long b = otherCollector.unfilteredDepthHistogramArray.get(i);
-            combinedCollector.unfilteredDepthHistogramArray.set(i, (a+b));
+            AtomicLong otherBasesExcludedByBaseq
+                    = (AtomicLong) datalist.get(3);
+            AtomicLong otherBasesExcludedByOverlap
+                    = (AtomicLong) datalist.get(4);
+            AtomicLong basesExcludedByCapping
+                    = (AtomicLong) datalist.get(5);
+
+            long otherCounter = (long) datalist.get(6);
+
+
+            for(int i=0; i<combinedCollector.unfilteredDepthHistogramArray.length(); i++){
+                long a = this.unfilteredDepthHistogramArray.get(i);
+                long b = otherUnfilteredDepthHistogramArray.get(i);
+                combinedCollector.unfilteredDepthHistogramArray.set(i, (a+b));
+            }
+
+            for(int i=0; i<combinedCollector.unfilteredDepthHistogramArray.length(); i++){
+                long a = this.unfilteredBaseQHistogramArray.get(i);
+                long b = otherUnfilteredBaseQHistogramArray.get(i);
+                combinedCollector.unfilteredBaseQHistogramArray.set(i, (a+b));
+            }
+
+            for(int i=0; i<combinedCollector.highQualityDepthHistogramArray.length(); i++){
+                long a = this.highQualityDepthHistogramArray.get(i);
+                long b = otherHighQualityDepthHistogramArray.get(i);
+                combinedCollector.highQualityDepthHistogramArray.set(i, (a+b));
+            }
+
+            long a = this.basesExcludedByBaseq.get();
+            long b = otherBasesExcludedByBaseq.get();
+            combinedCollector.basesExcludedByBaseq.set((a+b));
+
+            a = this.basesExcludedByOverlap.get();
+            b = otherBasesExcludedByOverlap.get();
+            combinedCollector.basesExcludedByOverlap.set((a+b));
+
+            a = this.basesExcludedByCapping.get();
+            b = basesExcludedByCapping.get();
+            combinedCollector.basesExcludedByCapping.set((a+b));
+
+            a = this.counter;
+            b = otherCounter;
+            combinedCollector.counter = (a+b);
+
+        } catch (ClassCastException cce){
+            cce.getMessage();
         }
-
-        for(int i=0; i<combinedCollector.unfilteredDepthHistogramArray.length(); i++){
-            long a = this.unfilteredBaseQHistogramArray.get(i);
-            long b = otherCollector.unfilteredBaseQHistogramArray.get(i);
-            combinedCollector.unfilteredBaseQHistogramArray.set(i, (a+b));
-        }
-
-        for(int i=0; i<combinedCollector.highQualityDepthHistogramArray.length(); i++){
-            long a = this.highQualityDepthHistogramArray.get(i);
-            long b = otherCollector.highQualityDepthHistogramArray.get(i);
-            combinedCollector.highQualityDepthHistogramArray.set(i, (a+b));
-        }
-
-        long a = this.basesExcludedByBaseq.get();
-        long b = otherCollector.basesExcludedByBaseq.get();
-        combinedCollector.basesExcludedByBaseq.set((a+b));
-
-        a = this.basesExcludedByOverlap.get();
-        b = otherCollector.basesExcludedByOverlap.get();
-        combinedCollector.basesExcludedByOverlap.set((a+b));
-
-        a = this.basesExcludedByCapping.get();
-        b = otherCollector.basesExcludedByCapping.get();
-        combinedCollector.basesExcludedByCapping.set((a+b));
-
-        a = this.counter;
-        b = otherCollector.counter;
-        combinedCollector.counter = (a+b);
 
 
         return combinedCollector;
