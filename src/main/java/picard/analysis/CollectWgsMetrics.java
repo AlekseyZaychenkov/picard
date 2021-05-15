@@ -316,19 +316,20 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
                              new ObjectOutputStream(
                                     new BufferedOutputStream(
                                         echoSocket.getOutputStream()));
+                    /* ObjectOutputStream osw =
+                             new ObjectOutputStream(
+                                     echoSocket.getOutputStream());*/
                      ObjectInputStream ois =
                              new ObjectInputStream(
                                      new BufferedInputStream(
                                         echoSocket.getInputStream())
                              );
-                     /*BufferedReader stdIn =
-                             new BufferedReader(
-                                     new InputStreamReader(System.in))*/
+
                 ) {
                     System.out.println("Flag 02");
                     ArrayList<Integer> newIntervalListNumbers = new ArrayList<Integer>();
 
-                    /*for (int j=0; j<intervalCollectionList.size(); j++) {
+                    for (int j=0; j<intervalCollectionList.size(); j++) {
                         Interval i = intervalCollectionList.get(j);
                         final ReferenceSequenceFileWalker refWalker = new ReferenceSequenceFileWalker(REFERENCE_SEQUENCE);
                         final SamReader inSamReader = getSamReader();
@@ -361,7 +362,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
                             }
                             newIntervalListLength = 0;
                         }
-                    }*/
+                    }
 
                     String userInput;
                     while (true) {
@@ -422,7 +423,7 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
 
                         System.out.println("Flag 02");
 
-                        while ((objectInput = in.readObject()) != null) {
+                      //  while ((objectInput = in.readObject()) != null) {
                                 if (objectInput instanceof ArrayList) {
                                     log.info("List of intervals was received");
                                     ArrayList<Integer> newIntervalListNumbers = (ArrayList<Integer>) objectInput;
@@ -450,16 +451,16 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
                                     processor.processFile();
 
 
-                                } else if (objectInput instanceof String) {
+                              //  } else if (objectInput instanceof String) {
 
                                 inputLine = (String) objectInput;
                                 if (inputLine.equals("waiting_for_your_data")) {
                                     System.out.println("out.writeObject(collector)");
 
-                                    osw.writeObject(collector.getDataSet());
-                                    osw.flush();
-                                    break;
-                                }
+                                    //osw.writeObject(collector.getDataSet());
+                                    //osw.flush();
+                                    //break;
+                               // }
                             }
                         }
 
@@ -468,9 +469,9 @@ static final String USAGE_DETAILS = "<p>This tool collects metrics about the fra
                     } catch (IOException e) {
                         System.out.println("Exception caught when trying to listen on port " + portNumber + " or listening for a connection");
                         System.out.println(e.getMessage());
-                    } catch (ClassNotFoundException ec) {
+                   // } catch (ClassNotFoundException ec) {
                         System.out.println("ClassNotFoundException");
-                        System.out.println(ec.getMessage());
+                    //    System.out.println(ec.getMessage());
                     }
 
                     serverSocket.close();
